@@ -1,0 +1,41 @@
+[tool.poetry]
+name = "borg"
+version = "0.1.0"
+description = "OpenAI loadbalancing proxy."
+authors = ["Michael C. McMinn <mmcminn@uniondynamic.com>"]
+license = "MIT"
+readme = "README.md"
+packages = [{include = "borg", from = "src"}]
+
+[tool.poetry.dependencies]
+python = "^3.12"
+fastapi = "^0.115.6"
+uvicorn = "^0.32.1"
+httpx = "^0.28.1"
+kubernetes = "^31.0.0"
+pydantic = "^2.10.3"
+aiohttp = "^3.12.13"
+cryptography = "^45.0.5"
+
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^8.3.4"
+mypy = "^1.13.0"
+black = "^24.10.0"
+isort = "^5.13.2"
+flake8 = "^7.1.1"
+pytest-asyncio = "^1.0.0"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+
+# pytest-asyncio specific configuration
+[tool.pytest_asyncio]
+asyncio_mode = "auto"

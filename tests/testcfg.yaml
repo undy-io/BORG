@@ -1,0 +1,8 @@
+borg:
+  auth_key: "saMmbffqDb0ZeqJM4abNz4gKV4PFzqz2gmeoGNiRo3I="  # valid base64-url 32-byte key
+  auth_prefix: "BORG:"
+  instances:
+    - endpoint: "http://127.0.0.1:9999"
+      apikey: "sk-test"
+      models: ["gpt-3.5-turbo"]
+  update_interval: -1

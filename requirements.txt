@@ -1,0 +1,7 @@
+fastapi>=0.115.6
+uvicorn>=0.32.1
+httpx>=0.28.1
+kubernetes>=31.0.0
+pydantic>=2.10.3
+aiohttp>=3.12.13
+cryptography>=45.0.5
