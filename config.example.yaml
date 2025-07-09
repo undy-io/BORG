@@ -11,6 +11,6 @@ borg:
       #   apikey: "sk‑anotherkey456"
       #   models: ["gpt-4o", "gpt-4o-mini"]
     k8s_discover:
-    # - namespace: vllm-servers
-    #   selector: borg/expose=vllm
-    #   modelkey: borg/models
+      # - namespace: vllm-servers
+      #   selector: borg/expose=vllm
+      #   modelkey: borg/models

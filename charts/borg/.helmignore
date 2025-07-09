@@ -1,0 +1,32 @@
+# OS files
+.DS_Store
+*.swp
+*.bak
+*.tmp
+*.orig
+*.rej
+
+# Source control
+.git/
+.gitignore
+.hg/
+.svn/
+.bzr/
+CVS/
+
+# Python/IDE/editor junk
+__pycache__/
+*.py[cod]
+.vscode/
+.idea/
+*.env
+.env
+
+# Helm build artifacts
+charts/
+Chart.lock
+*.tgz
+*.test.yaml
+test/
+tests/
+coverage.*

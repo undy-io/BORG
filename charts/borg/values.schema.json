@@ -1,0 +1,28 @@
+{
+    "$schema": "http://json-schema.org/schema#",
+    "type": "object",
+    "properties": {
+      "ingress": {
+        "type": "object",
+        "properties": {
+          "enabled": { "type": "boolean" },
+          "tls": {
+            "type": "object",
+            "properties": {
+              "secretName": {
+                "type": "string",
+                "description": "TLS secret name (optional override). Default: <release>-tls"
+              },
+              "hosts": {
+                "type": "array",
+                "items": { "type": "string" },
+                "minItems": 1
+              }
+            },
+            "required": ["hosts"]
+          }
+        }
+      }
+    }
+  }
+  

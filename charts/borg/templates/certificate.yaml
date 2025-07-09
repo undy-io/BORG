@@ -1,0 +1,60 @@
+{{- if .Values.ingress.enabled }}
+{{- $cn := .Values.ingress.issuer.cert.subject.commonName }}
+{{- $san := list }}
+
+{{/* Add all ingress TLS hosts to the SAN list */}}
+{{- range .Values.ingress.tls.hosts }}
+  {{- $san = append $san . }}
+{{- end }}
+
+{{/* Add explicitly declared altNames */}}
+{{- range .Values.ingress.issuer.cert.altNames }}
+  {{- $san = append $san . }}
+{{- end }}
+
+{{/* Add commonName if not already in the list */}}
+{{- if and $cn (not (has $cn $san)) }}
+  {{- $san = append $san $cn }}
+{{- end }}
+
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ include "borg.tlsSecretName" . }}
+  namespace: {{ .Release.Namespace }}
+spec:
+  secretName: {{ include "borg.tlsSecretName" . }}
+  issuerRef:
+    name: {{ .Values.ingress.issuer.name }}
+    kind: {{ .Values.ingress.issuer.kind | default "Issuer" }}
+  {{- if $cn }}
+  commonName: {{ $cn }}
+  {{- end }}
+  dnsNames:
+    {{- range $san }}
+    - {{ . }}
+    {{- end }}
+  {{- with .Values.ingress.issuer.cert.subject }}
+  subject:
+    {{- if .organizations }}
+    organizations:
+      {{- toYaml .organizations | nindent 6 }}
+    {{- end }}
+    {{- if .organizationalUnits }}
+    organizationalUnits:
+      {{- toYaml .organizationalUnits | nindent 6 }}
+    {{- end }}
+    {{- if .countries }}
+    countries:
+      {{- toYaml .countries | nindent 6 }}
+    {{- end }}
+    {{- if .localities }}
+    localities:
+      {{- toYaml .localities | nindent 6 }}
+    {{- end }}
+    {{- if .provinces }}
+    provinces:
+      {{- toYaml .provinces | nindent 6 }}
+    {{- end }}
+  {{- end }}
+{{- end }}

@@ -1,0 +1,56 @@
+replicaCount: 2
+
+image:
+  repository: ghcr.io/undy-io/borg
+  tag: 0.1.0
+  pullPolicy: IfNotPresent
+
+authKeySecret:
+  name: borg-auth
+  key: BORG_AUTH_KEY
+
+apikeySecrets:
+  name: borg-apikeys
+
+config:
+  auth_prefix: "BORG:"
+  instances:
+    - endpoint: http://10.0.0.5:8000
+      apikeyEnv: VLLM_APIKEY_1
+      models: ["gpt-3.5-turbo"]
+  k8s_discover:
+    - namespace: oai-services
+      selector: borg/expose=vllm
+      modelkey: borg/models
+
+ingress:
+  enabled: true
+  className: "nginx"
+  issuer:
+    name: pkirules-tls
+    kind: Issuer  # Could be ClusterIssuer for other environments
+    scope: namespaced  # or "cluster" if you ever switch
+    annotations:
+      nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+    cert:
+      subject:
+        commonName: null
+        organizations: []
+        organizationalUnits: []
+        countries: []
+        localities: []
+        provinces: []
+      altNames: []
+  hosts:
+    - host: borg.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+  tls:
+    secretName: ""
+    hosts:
+      - borg.example.com
+
+service:
+  port: 80
+  targetPort: 8000

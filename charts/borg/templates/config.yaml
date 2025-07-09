@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "borg.fullname" . }}-config
+  namespace: {{ .Release.Namespace }}
+data:
+  config.yaml: |
+    borg:
+      auth_key_from_env: {{ .Values.authKeySecret.key }}
+      auth_prefix: {{ .Values.config.auth_prefix }}
+      instances:
+{{ toYaml .Values.config.instances | indent 8 }}
+      k8s_discover:
+{{ toYaml .Values.config.k8s_discover | indent 8 }}
+

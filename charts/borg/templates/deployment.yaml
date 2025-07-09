@@ -1,0 +1,70 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "borg.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: {{ include "borg.name" . }}
+    chart: {{ include "borg.chart" . }}
+    release: {{ .Release.Name }}
+    heritage: {{ .Release.Service }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      app: {{ include "borg.name" . }}
+      release: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        app: {{ include "borg.name" . }}
+        release: {{ .Release.Name }}
+    spec:
+      serviceAccountName: {{ include "borg.fullname" . }}
+      containers:
+        - name: borg-proxy
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.service.targetPort }}
+              protocol: TCP
+          env:
+            - name: PORT
+              value: "{{ .Values.service.targetPort }}"
+            - name: PROXY_CONFIG
+              value: /app/config.yaml
+            - name: BORG_AUTH_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.authKeySecret.name }}
+                  key: {{ .Values.authKeySecret.key }}
+            {{- range .Values.config.instances }}
+            {{- if .apikeyEnv }}
+            - name: {{ .apikeyEnv }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $.Values.apikeySecrets.name }}
+                  key: {{ .apikeyEnv }}
+            {{- end }}
+            {{- end }}
+          volumeMounts:
+            - name: config-volume
+              mountPath: /app/config.yaml
+              subPath: config.yaml
+          livenessProbe:
+            httpGet:
+              path: /
+              port: {{ .Values.service.targetPort }}
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /
+              port: {{ .Values.service.targetPort }}
+            initialDelaySeconds: 2
+            periodSeconds: 5
+      volumes:
+        - name: config-volume
+          configMap:
+            name: {{ include "borg.fullname" . }}-config

@@ -1,0 +1,11 @@
+apiVersion: v2
+name: borg
+description: A Helm chart for the BORG load-balancing OpenAI proxy
+type: application
+version: 0.1.0      # Chart version
+appVersion: "0.1.0" # App (Docker image) version
+maintainers:
+  - name: Michael C. McMinn
+    email: mmcminn@uniondynamic.com
+sources:
+  - https://github.com/undy-io/borg

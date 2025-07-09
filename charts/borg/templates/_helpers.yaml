@@ -1,0 +1,15 @@
+{{- define "borg.name" -}}
+{{- .Chart.Name | trunc 63 | trimSuffix "-" -}}
+{{- end }}
+
+{{- define "borg.fullname" -}}
+{{- printf "%s-%s" .Release.Name (include "borg.name" .) | trunc 63 | trimSuffix "-" -}}
+{{- end }}
+
+{{- define "borg.chart" -}}
+{{- printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" -}}
+{{- end }}
+
+{{- define "borg.tlsSecretName" -}}
+{{- default (printf "%s-tls" .Release.Name) .Values.ingress.tls.secretName -}}
+{{- end -}}
