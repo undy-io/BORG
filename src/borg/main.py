@@ -136,7 +136,7 @@ async def _load_config() -> None:  # noqa: D401
 
     # ─── backends ───
     instances: List[Dict[str, Any]] = cfg.get('instances', []) or list()
-    apikey_default = os.getenv(API_KEY_ENV, DEFAULT_KEY_VAL)API_KEY_ENV
+    apikey_default = os.getenv(API_KEY_ENV, DEFAULT_KEY_VAL)
     for inst in instances:
         await proxy.add_instance(
             endpoint=inst['endpoint'],
