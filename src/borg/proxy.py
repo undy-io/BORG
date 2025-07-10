@@ -128,6 +128,7 @@ class ProxyService:
         Register *endpoint* for every model in *models*.
         Assumes the same API key applies to all.
         """
+        logger.info(f"Adding endpoint {endpoint} to models {','.join(models)}")
         async with self._lock:               # writer section
             for model in models:
                 bucket = self._instances.setdefault(model, RoundRobinSet())
@@ -138,6 +139,7 @@ class ProxyService:
         endpoint: str,
         models: List[str] | None = None) -> None:
         """Remove *endpoint* from every model group that contains it."""
+        logger.info(f"Removing endpoint {endpoint} from models {','.join(models)}")
         async with self._lock:
             if models is None:
                 models = self._instances.keys()

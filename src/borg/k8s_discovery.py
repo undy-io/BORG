@@ -14,6 +14,7 @@ logger = logging.getLogger(__name__)
 class Endpoint:
     endpoint: str
     models: List[str]
+    apikey: str
 
 class K8SDiscoveryService:
     def __init__(
@@ -98,17 +99,21 @@ class K8SDiscoveryService:
                 labels = pod.metadata.labels
                 annotations = pod.metadata.annotations
 
+                if not annotations:
+                    continue
+
                 models = None
                 if modelkey is not None:
                     models = annotations.get(modelkey, '').split(',')
                 
                 protocol = annotations.get('borg/protocol', 'http')
                 apibase = annotations.get('borg/apibase', '/v1')
-                apibase = annotations.get('borg/apiport', '8000')
+                apiport = annotations.get('borg/apiport', '8000')
 
-                endpoint = f'{protocol}://{pod_ip}:{apibase}{apibase}/models'
-
+                endpoint = f'{protocol}://{pod_ip}:{apiport}{apibase}/'
+                
                 if models is None and automodel:
+                    logger.info(f'Querying {endpoint} for models')
                     models = await K8SDiscoveryService._enum_models(
                         endpoint
                     )
@@ -118,7 +123,8 @@ class K8SDiscoveryService:
                 
                 yield Endpoint(
                     endpoint=endpoint,
-                    models=models
+                    models=models,
+                    apikey='EMPTY'
                 )
         except Exception as e:
             logger.error(f"Error discovering vLLM instances: {e}")
@@ -147,6 +153,8 @@ class K8SDiscoveryService:
         return new
 
     async def update(self, proxy):
+        logger.info(f'Checking for new pods...')
+        
         epmap = dict()
 
         async for ep in self.discover():
@@ -159,9 +167,9 @@ class K8SDiscoveryService:
         rmv = K8SDiscoveryService._epdiff(self._epmap, epmap)
 
         for ep in rmv:
-            proxy.remove_instance(ep, models=rmv[rm])
+            await proxy.remove_instance(ep, models=rmv[rm])
 
         for ep in add:
-            proxy.add_instance(ep, models=add[ep])
+            await proxy.add_instance(ep, 'EMPTY', models=add[ep])
         
         self._epmap = epmap

@@ -1,0 +1,14 @@
+{{/*
+Return the base name of this chart.
+*/}}
+{{- define "dummy-openai.name" -}}
+{{- default .Chart.Name .Values.nameOverride | trunc 63 | trimSuffix "-" -}}
+{{- end }}
+
+{{/*
+Return the fully qualified object name: <release>-<name>
+*/}}
+{{- define "dummy-openai.fullname" -}}
+{{- $name := default .Chart.Name .Values.nameOverride -}}
+{{- printf "%s-%s" .Release.Name $name | trunc 63 | trimSuffix "-" -}}
+{{- end }}

@@ -1,3 +1,4 @@
+# THIS IS AN EXAMPLE CONFIG
 borg:
     auth_key: "EMPTY"
     auth_preifx: ""

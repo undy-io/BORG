@@ -82,7 +82,7 @@ app = FastAPI(title='BORG proxy router', version='1.0.0')
 
 services = []
 
-def get_apikey(
+def _get_apikey(
     inst: Mapping[str, str],
     default: str = DEFAULT_KEY_VAL) -> str:
     env_var = inst.get("apikeyEnv")

@@ -14,12 +14,13 @@ apikeySecrets:
 
 config:
   auth_prefix: "BORG:"
+  update_interval: 30
   instances:
     - endpoint: http://10.0.0.5:8000
       apikeyEnv: VLLM_APIKEY_1
       models: ["gpt-3.5-turbo"]
   k8s_discover:
-    - namespace: oai-services
+    - namespace: default
       selector: borg/expose=vllm
       modelkey: borg/models
 

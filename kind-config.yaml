@@ -1,0 +1,14 @@
+# kind-config.yaml
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+
+nodes:
+- role: control-plane
+  # Map host ports → container ports so nginx-ingress sees real 80/443
+  extraPortMappings:
+  - containerPort: 80    # inside the node
+    hostPort: 8080         # http://localhost
+    protocol: TCP
+  - containerPort: 443   # inside the node
+    hostPort: 8443        # https://localhost
+    protocol: TCP

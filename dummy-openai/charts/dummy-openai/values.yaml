@@ -1,0 +1,11 @@
+replicaCount: 1
+
+image:
+  repository: localhost:5000/dummy-openai
+  tag: dev
+  pullPolicy: IfNotPresent
+
+service:
+  port: 8000
+
+resources: {}          # keep it tiny

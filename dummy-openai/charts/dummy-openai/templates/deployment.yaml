@@ -1,0 +1,29 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "dummy-openai.fullname" . }}
+  labels:
+    app.kubernetes.io/name: {{ include "dummy-openai.name" . }}
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    borg/expose: vllm                     # ← Borg discovery label
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "dummy-openai.name" . }}
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: {{ include "dummy-openai.name" . }}
+        app.kubernetes.io/instance: {{ .Release.Name }}
+        borg/expose: vllm                 # label copied to pod
+      annotations:
+        borg/models: gpt-3.5-turbo        # ← Borg model-key label
+    spec:
+      containers:
+        - name: api
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          ports:
+            - containerPort: {{ .Values.service.port }}
+          resources: {{- toYaml .Values.resources | nindent 12 }}
