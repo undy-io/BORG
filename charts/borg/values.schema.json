@@ -1,28 +1,160 @@
 {
-    "$schema": "http://json-schema.org/schema#",
-    "type": "object",
-    "properties": {
-      "ingress": {
-        "type": "object",
-        "properties": {
-          "enabled": { "type": "boolean" },
-          "tls": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "additionalProperties": false,
+
+  "properties": {
+    "replicaCount": { "type": "integer", "minimum": 1 },
+
+    "image": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "repository": { "type": "string" },
+        "tag":        { "type": "string" },
+        "pullPolicy": { "type": "string" }
+      },
+      "required": ["repository"]
+    },
+
+    "authKeySecret": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "name": { "type": "string" },
+        "key":  { "type": "string" }
+      },
+      "required": ["name", "key"]
+    },
+
+    "apikeySecrets": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "name": { "type": "string" }
+      },
+      "required": ["name"]
+    },
+
+    "config": {
+      "type": "object",
+      "description": "Proxy runtime configuration",
+      "additionalProperties": true
+    },
+
+    "service": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "port":       { "type": "integer", "minimum": 1, "maximum": 65535 },
+        "targetPort": { "type": "integer", "minimum": 1, "maximum": 65535 }
+      },
+      "required": ["port"]
+    },
+
+    "ingress": {
+      "type": "object",
+      "additionalProperties": false,
+
+      "properties": {
+        "enabled":   { "type": "boolean" },
+        "className": { "type": "string" },
+
+        "annotations": {
+          "type": "object",
+          "description": "Extra annotations on the Ingress",
+          "additionalProperties": { "type": "string" }
+        },
+
+        "issuer": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "name":  { "type": "string" },
+            "kind":  { "type": "string", "enum": ["Issuer", "ClusterIssuer"] },
+            "scope": { "type": "string", "enum": ["namespaced", "cluster"] },
+
+            "annotations": {
+              "type": "object",
+              "additionalProperties": { "type": "string" }
+            },
+
+            "cert": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "enabled": { "type": "boolean" },
+
+                "subject": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "commonName":          { "type": "string" },
+                    "organizations":       { "type": "array", "items": { "type": "string" } },
+                    "organizationalUnits": { "type": "array", "items": { "type": "string" } },
+                    "countries":           { "type": "array", "items": { "type": "string", "minLength": 2, "maxLength": 2 } },
+                    "localities":          { "type": "array", "items": { "type": "string" } },
+                    "provinces":           { "type": "array", "items": { "type": "string" } }
+                  }
+                },
+
+                "altNames": {
+                  "type": "array",
+                  "items": { "type": "string" }
+                }
+              }
+            }
+          },
+          "required": ["name"]
+        },
+
+        "hosts": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
             "type": "object",
+            "additionalProperties": false,
             "properties": {
-              "secretName": {
-                "type": "string",
-                "description": "TLS secret name (optional override). Default: <release>-tls"
-              },
-              "hosts": {
+              "host":  { "type": "string", "pattern": "^[A-Za-z0-9.-]+$" },
+
+              "paths": {
                 "type": "array",
-                "items": { "type": "string" },
-                "minItems": 1
+                "minItems": 1,
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "path":     { "type": "string" },
+                    "pathType": { "type": "string", "enum": ["Prefix", "Exact", "ImplementationSpecific"] }
+                  },
+                  "required": ["path", "pathType"]
+                }
               }
             },
-            "required": ["hosts"]
+            "required": ["host"]
+          }
+        },
+
+        "tls": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": { "type": "boolean" },
+
+            "secretName": {
+              "type": "string",
+              "description": "Override for the TLS secret (<release>-tls by default)"
+            },
+
+            "existingSecret": {
+              "type": ["string", "null"],
+              "description": "Reference to a pre-created secret"
+            }
           }
         }
-      }
+      },
+
+      "required": ["enabled", "hosts"]
     }
   }
-  
+}

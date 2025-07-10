@@ -41,6 +41,9 @@ from fastapi import Depends, FastAPI, Request, Response, status
 
 from .proxy import ProxyService  # local module containing the class built earlier
 
+API_KEY_ENV = 'API_KEY'
+DEFAULT_KEY_VAL = "EMPTY"
+
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s [%(levelname)s] %(name)s: %(message)s'
@@ -78,6 +81,14 @@ proxy = ProxyService()
 app = FastAPI(title='BORG proxy router', version='1.0.0')
 
 services = []
+
+def get_apikey(
+    inst: Mapping[str, str],
+    default: str = DEFAULT_KEY_VAL) -> str:
+    env_var = inst.get("apikeyEnv")
+    if env_var:
+        return os.getenv(env_var, default)
+    return inst.get("apikey", default)
 
 # Periodic service updates
 async def periodic_update(update_interval):
@@ -125,10 +136,11 @@ async def _load_config() -> None:  # noqa: D401
 
     # ─── backends ───
     instances: List[Dict[str, Any]] = cfg.get('instances', []) or list()
+    apikey_default = os.getenv(API_KEY_ENV, DEFAULT_KEY_VAL)API_KEY_ENV
     for inst in instances:
         await proxy.add_instance(
             endpoint=inst['endpoint'],
-            apikey=inst['apikey'],
+            apikey=_get_apikey(inst, default=apikey_default),
             models=inst['models'],
         )
     

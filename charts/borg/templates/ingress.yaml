@@ -1,4 +1,9 @@
 {{- if .Values.ingress.enabled }}
+
+{{- $useTLS := and .Values.ingress.tls.enabled
+                 ( or .Values.ingress.tls.existingSecret
+                      (.Capabilities.APIVersions.Has "cert-manager.io/v1") ) }}
+
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
@@ -25,10 +30,12 @@ spec:
                   number: {{ $.Values.service.port }}
           {{- end }}
     {{- end }}
+  {{- if $useTLS }}
   tls:
-    - secretName: {{ include "borg.tlsSecretName" . }}
+    - secretName: {{ default (include "borg.tlsSecretName" .) .Values.ingress.tls.existingSecret }}
       hosts:
         {{- range .Values.ingress.tls.hosts }}
         - {{ . }}
         {{- end }}
+  {{- end }}
 {{- end }}

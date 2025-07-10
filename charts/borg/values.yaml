@@ -2,7 +2,7 @@ replicaCount: 2
 
 image:
   repository: ghcr.io/undy-io/borg
-  tag: 0.1.0
+  tag: edge
   pullPolicy: IfNotPresent
 
 authKeySecret:
@@ -33,8 +33,9 @@ ingress:
     annotations:
       nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
     cert:
+      enabled: true
       subject:
-        commonName: null
+        commonName: borg.example.com
         organizations: []
         organizationalUnits: []
         countries: []
@@ -47,9 +48,9 @@ ingress:
         - path: /
           pathType: Prefix
   tls:
+    enabled: true
+    existingSecret: null
     secretName: ""
-    hosts:
-      - borg.example.com
 
 service:
   port: 80
