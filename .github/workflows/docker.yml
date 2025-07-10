@@ -2,9 +2,9 @@ name: Build and Push Docker Image
 
 on:
   push:
-    branches: [main]
-    tags: ["v*.*.*"]
-  workflow_dispatch:
+    branches: [main]           # per-commit builds
+    tags:    ['v*.*.*']        # SemVer release tags
+  workflow_dispatch:           # manual runs (optional)
 
 jobs:
   build:
@@ -18,6 +18,24 @@ jobs:
       - name: Checkout source
         uses: actions/checkout@v4
 
+      # 2. Derive image tags & OCI labels
+      - name: Docker meta
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/borg
+          flavor: |
+            latest=auto
+          tags: |
+            # ─── Commits to main ───
+            type=raw,value=edge,enable={{is_default_branch}}
+            type=sha,format=short           # 90dd603
+
+            # ─── SemVer release tags ───
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+
+
       - name: Log in to GHCR
         uses: docker/login-action@v3
         with:
@@ -30,7 +48,5 @@ jobs:
         with:
           context: .
           push: true
-          tags: |
-            ghcr.io/${{ github.repository_owner }}/borg:latest
-            ghcr.io/${{ github.repository_owner }}/borg:${{ github.sha }}
-            ghcr.io/${{ github.repository_owner }}/borg:${{ steps.extract_tag.outputs.TAG }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}

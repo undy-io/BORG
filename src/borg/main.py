@@ -18,7 +18,7 @@ Run with:
             models: ["gpt-4o", "gpt-4o-mini"]
         discover:
         - namespace: vllm-servers
-          selector: borg/expose=vllm
+          selector: borg/expose=yes
           modelkey: borg/models
 '''
 from __future__ import annotations
