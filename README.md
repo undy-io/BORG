@@ -1,6 +1,8 @@
 
 # 🛰️ BORG — Kubernetes‑aware OpenAI Load‑Balancing Proxy
 
+## NOTE If you couldn't tell from all the unicode icons, this is AI generated so may have errors. At some point I'll care and fix it.
+
 > **BORG** turns a fleet of OpenAI‑compatible back‑ends (vLLM, openai‑proxy, FastAPI stubs, etc.) into **one** drop‑in `/v1` endpoint. It auto‑discovers pods in your cluster, fan‑outs requests across them, and exposes the union of all models.
 
 ![CI](https://img.shields.io/github/actions/workflow/status/undy-io/BORG/docker.yml?logo=github\&label=Build)
