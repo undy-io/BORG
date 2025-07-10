@@ -2,7 +2,7 @@ name: Build and Push Docker Image
 
 on:
   push:
-    branches: [main]           # per-commit builds
+    branches: [master]         # per-commit builds
     tags:    ['v*.*.*']        # SemVer release tags
   workflow_dispatch:           # manual runs (optional)
 
