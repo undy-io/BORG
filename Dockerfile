@@ -18,7 +18,7 @@ RUN apt-get remove -y curl && apt-get autoremove -y && apt-get clean
 
 # Copy application code
 COPY src/ ./src/
-COPY config.yaml ./config.yaml 
+COPY config.example.yaml ./config.yaml 
 ENV PYTHONPATH=/app/src
 
 COPY entrypoint.sh /entrypoint.sh
