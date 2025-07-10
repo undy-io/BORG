@@ -27,14 +27,13 @@ jobs:
           flavor: |
             latest=auto
           tags: |
-            # ─── Commits to main ───
-            type=raw,value=edge,enable={{is_default_branch}}
-            type=sha,format=short           # 90dd603
+            # ─── Commits to master ───
+            type=edge,branch=master
+            type=sha,format=short
 
             # ─── SemVer release tags ───
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
-            type=raw,value=latest,enable={{is_semver}}
 
 
       - name: Log in to GHCR
