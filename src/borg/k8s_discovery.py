@@ -105,6 +105,7 @@ class K8SDiscoveryService:
                 models = None
                 if modelkey is not None:
                     models = annotations.get(modelkey, '').split(',')
+                    models = list(filter(None, models.split(',')))
                 
                 protocol = annotations.get('borg/protocol', 'http')
                 apibase = annotations.get('borg/apibase', '/v1')
@@ -112,7 +113,7 @@ class K8SDiscoveryService:
 
                 endpoint = f'{protocol}://{pod_ip}:{apiport}{apibase}/'
                 
-                if models is None and automodel:
+                if not models and automodel:
                     logger.info(f'Querying {endpoint} for models')
                     models = await K8SDiscoveryService._enum_models(
                         endpoint
