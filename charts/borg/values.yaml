@@ -36,7 +36,7 @@ ingress:
     cert:
       enabled: true
       subject:
-        commonName: borg.example.com
+        #commonName: 
         organizations: []
         organizationalUnits: []
         countries: []

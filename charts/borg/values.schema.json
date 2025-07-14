@@ -89,7 +89,7 @@
                   "type": "object",
                   "additionalProperties": false,
                   "properties": {
-                    "commonName":          { "type": "string" },
+                    "commonName":          { "type": "string", "optional": true },
                     "organizations":       { "type": "array", "items": { "type": "string" } },
                     "organizationalUnits": { "type": "array", "items": { "type": "string" } },
                     "countries":           { "type": "array", "items": { "type": "string", "minLength": 2, "maxLength": 2 } },

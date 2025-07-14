@@ -34,8 +34,8 @@ spec:
   tls:
     - secretName: {{ default (include "borg.tlsSecretName" .) .Values.ingress.tls.existingSecret }}
       hosts:
-        {{- range .Values.ingress.tls.hosts }}
-        - {{ . }}
+        {{- range .Values.ingress.hosts }}
+        - {{ .host }}
         {{- end }}
   {{- end }}
 {{- end }}

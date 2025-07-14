@@ -105,7 +105,7 @@ class K8SDiscoveryService:
                 models = None
                 if modelkey is not None:
                     models = annotations.get(modelkey, '').split(',')
-                    models = list(filter(None, models.split(',')))
+                    models = list(filter(None, models))
                 
                 protocol = annotations.get('borg/protocol', 'http')
                 apibase = annotations.get('borg/apibase', '/v1')
