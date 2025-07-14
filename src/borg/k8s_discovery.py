@@ -62,7 +62,7 @@ class K8SDiscoveryService:
         async with aiohttp.ClientSession(
             timeout=aiohttp.ClientTimeout(total=timeout)) as session:
             try:
-                async with session.get(endpoint, headers=headers) as response:
+                async with session.get(f'{endpoint}models', headers=headers) as response:
                     response.raise_for_status()  # Raise exception for bad status codes
                     data = await response.json()
                     return data
