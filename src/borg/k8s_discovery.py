@@ -65,7 +65,7 @@ class K8SDiscoveryService:
                 async with session.get(f'{endpoint}models', headers=headers) as response:
                     response.raise_for_status()  # Raise exception for bad status codes
                     data = await response.json()
-                    return data
+                    return data['data']
             except aiohttp.ClientError as e:
                 print(f"Request failed: {e}")
                 raise
