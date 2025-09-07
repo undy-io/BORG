@@ -65,7 +65,7 @@ class K8SDiscoveryService:
                 async with session.get(f'{endpoint}models', headers=headers) as response:
                     response.raise_for_status()  # Raise exception for bad status codes
                     data = await response.json()
-                    return data['data']
+                    return data['data']['id']
             except aiohttp.ClientError as e:
                 print(f"Request failed: {e}")
                 raise
@@ -160,7 +160,7 @@ class K8SDiscoveryService:
 
         async for ep in self.discover():
             for m in ep.models:
-                if not m in epmap:
+                if not m in epmap: #Something is wrong here, m is a dict not a string?
                     epmap[m] = set()
                 epmap[m].add(ep.endpoint)
         
@@ -168,7 +168,7 @@ class K8SDiscoveryService:
         rmv = K8SDiscoveryService._epdiff(self._epmap, epmap)
 
         for ep in rmv:
-            await proxy.remove_instance(ep, models=rmv[rm])
+            await proxy.remove_instance(ep, models=rmv[ep])
 
         for ep in add:
             await proxy.add_instance(ep, 'EMPTY', models=add[ep])
