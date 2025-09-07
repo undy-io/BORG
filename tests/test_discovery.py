@@ -18,12 +18,13 @@ class TestEndpoint:
         models = ["model1", "model2"]
         endpoint = Endpoint(
             endpoint="http://localhost:8000/v1/models",
-            models=models
+            models=models,
+            apikey="EMPTY"
         )
         
         assert endpoint.endpoint == "http://localhost:8000/v1/models"
         assert endpoint.models == models
-
+        assert endpoint.apikey == "EMPTY"
 
 class TestK8SDiscoveryService:
     """Test cases for K8SDiscoveryService"""
@@ -70,18 +71,20 @@ class TestK8SDiscoveryService:
     @pytest.mark.asyncio
     async def test_enum_models_success(self):
         """Test successful model enumeration"""
-        mock_response_data = {
+        mock_model_data = {
             "data": [
                 {"id": "model1", "object": "model"},
                 {"id": "model2", "object": "model"}
             ]
         }
+
+        mock_response_data = ["model1", "model2"]
         
         # Mock the entire aiohttp flow properly
         with patch('borg.k8s_discovery.aiohttp.ClientSession') as mock_session_class:
             # Create mock response
             mock_response = Mock()
-            mock_response.json = AsyncMock(return_value=mock_response_data)
+            mock_response.json = AsyncMock(return_value=mock_model_data)
             mock_response.raise_for_status = Mock()
             mock_response.__aenter__ = AsyncMock(return_value=mock_response)
             mock_response.__aexit__ = AsyncMock(return_value=None)
@@ -171,7 +174,7 @@ class TestK8SDiscoveryService:
             endpoints.append(endpoint)
         
         assert len(endpoints) == 1
-        assert endpoints[0].endpoint == "http://192.168.1.100/v1/models"
+        assert endpoints[0].endpoint == "http://192.168.1.100:8000/v1/"
         assert endpoints[0].models == ['model1', 'model2']
     
     @pytest.mark.asyncio
@@ -271,8 +274,8 @@ class TestK8SDiscoveryService:
         with patch.object(mock_service, '_discover') as mock_discover:
             mock_discover.return_value = AsyncMock()
             mock_discover.return_value.__aiter__.return_value = [
-                Endpoint("http://test1:8000/v1/models", ["model1"]),
-                Endpoint("http://test2:8000/v1/models", ["model2"])
+                Endpoint("http://test1:8000/v1/models", ["model1"], "EMPTY"),
+                Endpoint("http://test2:8000/v1/models", ["model2"], "EMPTY")
             ]
             
             endpoints = []
@@ -314,8 +317,8 @@ class TestK8SDiscoveryService:
         """Test update method with proxy integration"""
         # Mock the discover method
         mock_endpoints = [
-            Endpoint("http://endpoint1:8000/v1/models", ["model1"]),
-            Endpoint("http://endpoint2:8000/v1/models", ["model2"])
+            Endpoint("http://endpoint1:8000/v1/models", ["model1"], "EMPTY"),
+            Endpoint("http://endpoint2:8000/v1/models", ["model2"], "EMPTY")
         ]
         
         with patch.object(mock_service, 'discover') as mock_discover:
@@ -328,8 +331,8 @@ class TestK8SDiscoveryService:
             
             # Mock proxy
             mock_proxy = Mock()
-            mock_proxy.add_instance = Mock()
-            mock_proxy.remove_instance = Mock()
+            mock_proxy.add_instance = AsyncMock()
+            mock_proxy.remove_instance = AsyncMock()
             
             # Set initial state
             mock_service._epmap = {}
@@ -376,7 +379,7 @@ class TestIntegration:
                 endpoints.append(endpoint)
             
             assert len(endpoints) == 1
-            assert endpoints[0].endpoint == "http://192.168.1.100/v1/models"
+            assert endpoints[0].endpoint == "http://192.168.1.100:8000/v1/"
             assert endpoints[0].models == ['model1', 'model2']
 
 
