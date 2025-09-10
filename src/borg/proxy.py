@@ -1,16 +1,14 @@
 import asyncio
 import json
-import os
+import base64
 from itertools import cycle
-from typing import Dict, List, Optional
+from typing import Dict, List
 
 import httpx
-from pydantic import BaseModel
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-from fastapi import Depends, FastAPI, HTTPException, Request, Response
+from fastapi import HTTPException, Request, Response, status
 from starlette.responses import StreamingResponse
-from fastapi.responses import JSONResponse
 
 from typing import Any, Tuple, Dict, List
 
@@ -49,6 +47,8 @@ class RoundRobinSet:
         return next(self._cycler)
 
 class ProxyService:
+    NONCE_LEN = 12
+
     def __init__(
         self,
         namespace: str = 'default',
@@ -70,7 +70,7 @@ class ProxyService:
         """Set the authentication key for token decryption."""
         self.auth_key = auth_key
 
-    def set_auth_prefix(self, auth_prefix: bytes) -> None:
+    def set_auth_prefix(self, auth_prefix: str) -> None:
         """Set the authentication key for token decryption."""
         self.auth_prefix = auth_prefix
     
@@ -142,10 +142,11 @@ class ProxyService:
         logger.info(f"Removing endpoint {endpoint} from models {','.join(models)}")
         async with self._lock:
             if models is None:
-                models = self._instances.keys()
+                models = list(self._instances.keys())
             
             for model in models:
-                await sself._instances[model].remove(endpoint)
+                if model in self._instances:
+                    self._instances[model].rmv(endpoint)
         
     async def pick_endpoint(self, model: str) -> str:
         """
@@ -202,11 +203,13 @@ class ProxyService:
         excluded = {"host", "content-length", "connection", "keep-alive",
                     "proxy-authenticate", "proxy-authorization", "te",
                     "trailers", "transfer-encoding", "upgrade"}
+        
         forward_headers = {
             k: v
             for k, v in request.headers.items()
             if k.lower() not in excluded
         }
+
         forward_headers["authorization"] = f"Bearer {meta['apikey']}"
 
         # Grab the body (it will already be bytes for JSON requests)
@@ -228,6 +231,7 @@ class ProxyService:
                                  "transfer-encoding",
                                  "connection"}
         }
+
         return Response(
             content=r.content,
             status_code=r.status_code,
@@ -246,11 +250,13 @@ class ProxyService:
         excluded = {"host", "content-length", "connection", "keep-alive",
                     "proxy-authenticate", "proxy-authorization", "te",
                     "trailers", "transfer-encoding", "upgrade"}
+        
         forward_headers = {
             k: v
             for k, v in request.headers.items()
             if k.lower() not in excluded
         }
+
         forward_headers["authorization"] = f"Bearer {meta['apikey']}"
 
         # NOTE: `httpx` lets us stream both the request *and* the response
@@ -292,8 +298,10 @@ class ProxyService:
         * Delegates to :pymeth:`ProxyService.proxy_request` or
           :pymeth:`ProxyService.proxy_request_stream`.
         """
+        raw_body = await request.body()  
+
         try:
-            body: Dict[str, Any] = await request.json()
+            body: Dict[str, Any] = json.loads(raw_body)
         except json.JSONDecodeError as exc:  # pragma: no cover — FastAPI already validates
             raise HTTPException(status.HTTP_400_BAD_REQUEST, "Body must be valid JSON") from exc
 
@@ -301,7 +309,8 @@ class ProxyService:
         if not model:
             raise HTTPException(status.HTTP_400_BAD_REQUEST, "Missing 'model' in request body")
 
-        wants_stream = body.get("stream") or request.headers.get("accept") == "text/event-stream"
+        accept = request.headers.get("accept", "")
+        wants_stream = body.get("stream") or "text/event-stream" in accept
 
         if wants_stream:
             return await self.proxy_request_stream(model, request)

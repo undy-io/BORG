@@ -65,6 +65,7 @@ def _get_config_info(
     return borg.get("auth_key_from_env"), borg.get("auth_prefix")
 
 def _get_key(
+    v1: client.CoreV1Api,
     namespace: str,
     release: str,
     key_name: Optional[str] = None,
@@ -75,13 +76,7 @@ def _get_key(
 
     If *key_name* is omitted, the first key in the Secret's data is used.
     """
-    # Initialise the Kubernetes client using local kubeconfig
-    try:
-        config.load_kube_config()          # ~/.kube/config or $KUBECONFIG
-    except Exception as exc:               # noqa: BLE001
-        raise SystemExit(f"[generate_key] cannot load kubeconfig: {exc}") from exc
 
-    v1 = client.CoreV1Api()
     secret_name = f"{release}{secret_suffix}"
     try:
         secret = v1.read_namespaced_secret(secret_name, namespace)
@@ -105,7 +100,7 @@ def _get_key(
         # Take the first key (deterministic order in Python ≥3.7)
         key_name, b64 = next(iter(secret.data.items()))
         print(f"[generate_key] using key '{key_name}' from Secret '{secret_name}'", file=sys.stderr)
-
+    
     try:
         key = base64.b64decode(b64)
     except Exception as exc:               # noqa: BLE001
@@ -177,7 +172,7 @@ def main() -> None:  # noqa: D401
     auth_prefix = args.auth_prefix or cm_prefix or "PROXY:"
 
     # ── Fetch the AES-256 key ──
-    key = _get_secret_key(
+    key = _get_key(
         v1,
         namespace=args.namespace,
         release=args.release,

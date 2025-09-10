@@ -35,9 +35,9 @@ import logging
 
 from pathlib import Path
 from pydantic import BaseModel
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Mapping
 
-from fastapi import Depends, FastAPI, Request, Response, status
+from fastapi import Depends, FastAPI, Request, Response
 
 from .proxy import ProxyService  # local module containing the class built earlier
 
@@ -187,7 +187,7 @@ async def list_models():
 async def openai_proxy(
     remainder: str,
     request: Request,
-    username: str = Depends(lambda req: proxy.require_auth(req)),
+    username: str = Depends(proxy.require_auth),
     ) -> Response:  # noqa: D401
     return await proxy.proxy(remainder, request)
 
