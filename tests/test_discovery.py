@@ -174,7 +174,7 @@ class TestK8SDiscoveryService:
             endpoints.append(endpoint)
         
         assert len(endpoints) == 1
-        assert endpoints[0].endpoint == "http://192.168.1.100:8000/v1/"
+        assert endpoints[0].endpoint == "http://192.168.1.100:8000"
         assert endpoints[0].models == ['model1', 'model2']
     
     @pytest.mark.asyncio
@@ -379,7 +379,7 @@ class TestIntegration:
                 endpoints.append(endpoint)
             
             assert len(endpoints) == 1
-            assert endpoints[0].endpoint == "http://192.168.1.100:8000/v1/"
+            assert endpoints[0].endpoint == "http://192.168.1.100:8000"
             assert endpoints[0].models == ['model1', 'model2']
 
 
