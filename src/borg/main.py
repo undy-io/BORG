@@ -26,6 +26,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import base64
+from contextlib import asynccontextmanager
 import json
 import yaml
 import os
@@ -77,35 +78,8 @@ def _parse_args() -> argparse.Namespace:  # executed only when run as a script
 # Application & global objects
 ###############################################################################
 
-proxy = ProxyService()
-app = FastAPI(title='BORG proxy router', version='1.0.0')
-
-services = []
-
-def _get_apikey(
-    inst: Mapping[str, str],
-    default: str = DEFAULT_KEY_VAL) -> str:
-    env_var = inst.get("apikeyEnv")
-    if env_var:
-        return os.getenv(env_var, default)
-    return inst.get("apikey", default)
-
-# Periodic service updates
-async def periodic_update(update_interval):
-    '''
-    Periodically discover vLLM instances
-    '''
-    while True:
-        for svc in services:
-            try:
-                await svc.update(proxy)
-            except Exception as e:
-                logger.exception(f'Exception during service update {e}')
-
-        await asyncio.sleep(update_interval)
-
-@app.on_event('startup')
-async def _load_config() -> None:  # noqa: D401
+@asynccontextmanager
+async def lifespan(app: FastAPI):
     app.state.config_path = getattr(app.state, "config_path", None) \
                             or os.getenv("PROXY_CONFIG", "config.yaml")
 
@@ -115,10 +89,9 @@ async def _load_config() -> None:  # noqa: D401
         raise FileNotFoundError(f'Config not found: {cfg_path}')
 
     with cfg_path.open('r', encoding='utf-8') as fh:
-        if cfg_path.suffix == '.json':
-            cfg = json.load(fh)['borg']
-        else:
-            cfg = yaml.safe_load(fh)['borg']
+        cfg_data = yaml.safe_load(fh) if cfg_path.suffix != '.json' else json.load(fh)
+    
+    cfg = cfg_data.get('borg', {})
     
     # ─── auth key ───
     auth_key = os.getenv('AUTH_KEY', cfg.get('auth_key', 'EMPTY'))
@@ -144,6 +117,8 @@ async def _load_config() -> None:  # noqa: D401
             models=inst['models'],
         )
     
+    # ─── Background Task ───
+    update_task = None
     update_interval = cfg.get('update_interval', -1)
 
     if update_interval > 0:
@@ -156,9 +131,48 @@ async def _load_config() -> None:  # noqa: D401
                 logger.exception('Failed to load k8s discovery service', e)
 
         if services:
-            asyncio.create_task(periodic_update(update_interval))
+            update_task = asyncio.create_task(periodic_update(update_interval))
 
     logger.info('Loaded %d backend instances and auth key', len(instances))
+
+    logger.info("Application startup complete.")
+    yield
+
+    # --- SHUTDOWN LOGIC ---
+    # This code runs when the application is shutting down
+    if update_task:
+        update_task.cancel()
+        logger.info("Background update task cancelled.")
+    
+    logger.info("Application shutdown complete.")
+
+
+proxy = ProxyService()
+app = FastAPI(title='BORG proxy router', version='1.0.0', lifespan=lifespan)
+
+services = []
+
+def _get_apikey(
+    inst: Mapping[str, str],
+    default: str = DEFAULT_KEY_VAL) -> str:
+    env_var = inst.get("apikeyEnv")
+    if env_var:
+        return os.getenv(env_var, default)
+    return inst.get("apikey", default)
+
+# Periodic service updates
+async def periodic_update(update_interval):
+    '''
+    Periodically discover vLLM instances
+    '''
+    while True:
+        for svc in services:
+            try:
+                await svc.update(proxy)
+            except Exception as e:
+                logger.exception(f'Exception during service update {e}')
+
+        await asyncio.sleep(update_interval)
 
 ###############################################################################
 # Routes

@@ -188,7 +188,7 @@ class ProxyService:
                 ]
             }
     
-    async def proxy_request(self, model: str, request: Request) -> Response:
+    async def proxy_request(self, model: str, request: Request, raw_body: bytes) -> Response:
         """
         Forward a **regular** (non-streaming) OpenAI-compatible request
         to the next backend instance and return the backend’s response
@@ -212,15 +212,12 @@ class ProxyService:
 
         forward_headers["authorization"] = f"Bearer {meta['apikey']}"
 
-        # Grab the body (it will already be bytes for JSON requests)
-        body = await request.body()
-
         async with httpx.AsyncClient(timeout=30.0) as client:
             r = await client.request(
                 request.method,
                 upstream_url,
                 headers=forward_headers,
-                content=body,
+                content=raw_body,
                 params=request.query_params,
             )
 
@@ -239,7 +236,7 @@ class ProxyService:
             media_type=r.headers.get("content-type"),
         )
 
-    async def proxy_request_stream(self, model: str, request: Request) -> Response:
+    async def proxy_request_stream(self, model: str, request: Request, raw_body: bytes) -> Response:
         """
         Same idea as `proxy_request`, but keeps the HTTP/1.1 stream open
         so tokens/chunks pass through in real time (SSE or chunked JSON).
@@ -265,7 +262,7 @@ class ProxyService:
                 request.method,
                 upstream_url,
                 headers=forward_headers,
-                content=request.stream(),        # raw incoming body ↗
+                content=raw_body,        # raw incoming body ↗
                 params=request.query_params,
             ) as upstream:
 
@@ -312,7 +309,11 @@ class ProxyService:
         accept = request.headers.get("accept", "")
         wants_stream = body.get("stream") or "text/event-stream" in accept
 
-        if wants_stream:
-            return await self.proxy_request_stream(model, request)
+        try:
+            if wants_stream:
+                return await self.proxy_request_stream(model, request, raw_body)
 
-        return await self.proxy_request(model, request)
+            return await self.proxy_request(model, request, raw_body)
+        except Exception as e:
+            logger.exception(f"Fault occured proxying the request : {e}")
+            raise
