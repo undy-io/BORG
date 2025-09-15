@@ -184,48 +184,29 @@ def test_proxy_forwards_and_swaps_auth_header(client_noauth: TestClient):
     assert data["received"] == payload
     assert data["content_type"] == "application/json"
 
-@pytest.mark.asyncio
-async def test_proxy_streaming_via_stream_flag(client_noauth: TestClient):
-    """
-    This test now uses httpx.AsyncClient to handle the stream correctly.
-    """
+def test_proxy_streaming_via_stream_flag(client_noauth: TestClient):
     payload = {
         "model": "openai/gpt-oss-20b",
-        "stream": True,
+        "stream": True,  # should force streaming path
         "messages": [{"role": "user", "content": "Hello"}],
     }
-    
-    # 1. Use a true async client pointing at your app
-    transport = ASGITransport(app=client_noauth.app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
-        # 2. Use 'async with' to make the streaming request
-        async with client.stream("POST", "/v1/chat/completions", json=payload) as r:
-            assert r.status_code == 200
-            
-            # 3. Use 'async for' to iterate over the chunks
-            text_chunks = [chunk.decode() async for chunk in r.aiter_raw()]
-            text = "".join(text_chunks)
-            
-            assert "[DONE]" in text
+    with client_noauth.stream("POST", "/v1/chat/completions", json=payload) as r:
+        assert r.status_code == 200
+        # Gather the SSE stream into a single string
+        text = "".join([chunk.decode() for chunk in r.iter_raw()])
+        assert "[DONE]" in text
 
-@pytest.mark.asyncio
-async def test_proxy_streaming_via_accept_header(client_noauth: TestClient):
-    """
-    This test is also updated to use httpx.AsyncClient.
-    """
+def test_proxy_streaming_via_accept_header(client_noauth: TestClient):
     payload = {
         "model": "openai/gpt-oss-20b",
         "messages": [{"role": "user", "content": "Hello"}],
     }
     headers = {"Accept": "text/event-stream; charset=utf-8"}
-    
-    transport = ASGITransport(app=client_noauth.app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
-        async with client.stream("POST", "/v1/chat/completions", json=payload, headers=headers) as r:
-            assert r.status_code == 200
+    with client_noauth.stream("POST", "/v1/chat/completions", json=payload, headers=headers) as r:
+        assert r.status_code == 200
+        text = "".join([chunk.decode() for chunk in r.iter_raw()])
+        assert "[DONE]" in text
 
-            text = "".join([chunk.decode() async for chunk in r.aiter_raw()])
-            assert "[DONE]" in text
 
 def test_unknown_model_returns_404(client_noauth: TestClient):
     payload = {"model": "totally-unknown-model", "messages": [{"role": "user", "content": "Hi"}]}

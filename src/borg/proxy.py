@@ -1,9 +1,11 @@
 import asyncio
+from contextlib import AsyncExitStack
 import json
 import base64
 from itertools import cycle
 from typing import Dict, List
 
+import anyio
 import httpx
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
@@ -256,31 +258,46 @@ class ProxyService:
 
         forward_headers["authorization"] = f"Bearer {meta['apikey']}"
 
-        # NOTE: `httpx` lets us stream both the request *and* the response
-        async with httpx.AsyncClient(timeout=None) as client:
-            async with client.stream(
+        stack = AsyncExitStack()
+        client = await stack.enter_async_context(httpx.AsyncClient(timeout=None))
+        upstream = await stack.enter_async_context(
+            client.stream(
                 request.method,
                 upstream_url,
                 headers=forward_headers,
-                content=raw_body,        # raw incoming body ↗
+                content=raw_body,
                 params=request.query_params,
-            ) as upstream:
+            )
+        )
 
-                async def aiter():
-                    async for chunk in upstream.aiter_bytes():
+        resp_headers = {
+            k: v for k, v in upstream.headers.items()
+            if k.lower() not in {"content-length", "content-encoding", "transfer-encoding", "connection"}
+        }
+        status_code = upstream.status_code
+        media_type = upstream.headers.get("content-type")
+
+        async def aiter():
+            try:
+                async for chunk in upstream.aiter_bytes():
+                    # (Optional) backpressure: yield only non-empty chunks
+                    if chunk:
                         yield chunk
+            except httpx.StreamClosed:
+                # Upstream ended early; treat as EOF.
+                return
+            except anyio.get_cancelled_exc_class():
+                # Downstream client disconnected; end quietly.
+                return
+            finally:
+                await stack.aclose()  # closes upstream then client
 
-                return StreamingResponse(
-                    aiter(),
-                    status_code=upstream.status_code,
-                    media_type=upstream.headers.get("content-type"),
-                    headers={
-                        k: v for k, v in upstream.headers.items()
-                        if k.lower() not in {"content-encoding",
-                                             "transfer-encoding",
-                                             "connection"}
-                    },
-                )
+        return StreamingResponse(
+            aiter(),
+            status_code=status_code,
+            media_type=media_type,
+            headers=resp_headers,
+        )
     
     async def proxy(
         self,
