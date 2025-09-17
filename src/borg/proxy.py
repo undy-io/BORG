@@ -47,6 +47,9 @@ class RoundRobinSet:
         if not self._cycler:
             raise RuntimeError("RoundRobinSet is empty")
         return next(self._cycler)
+    
+    def __len__(self):
+        return len(self._data)
 
 class ProxyService:
     NONCE_LEN = 12
@@ -136,42 +139,61 @@ class ProxyService:
                 bucket = self._instances.setdefault(model, RoundRobinSet())
                 bucket.add(endpoint, apikey=apikey)
     
+    def _rmv_ep(self, model: str, endpoint: str) -> None:
+        """Remove endpoint from a model bucket and delete the model if it becomes empty.
+        NOTE: must be called with self._lock held.
+        """
+        rrset = self._instances.get(model)
+
+        if rrset is None:
+            return
+        
+        rrset.rmv(endpoint)
+
+        if not rrset:
+            del self._instances[model]
+
     async def remove_instance(
         self,
         endpoint: str,
         models: List[str] | None = None) -> None:
         """Remove *endpoint* from every model group that contains it."""
-        logger.info(f"Removing endpoint {endpoint} from models {','.join(models)}")
+
+        logger.info(
+            "Removing endpoint %s from models %s",
+            endpoint,
+            ",".join(models) if models else "*ALL*",
+        )
+        
         async with self._lock:
-            if models is None:
-                models = list(self._instances.keys())
+            target_models = list(self._instances.keys()) \
+                if models is None \
+                    else set(models)
             
-            for model in models:
-                if model in self._instances:
-                    self._instances[model].rmv(endpoint)
+            for model in target_models:
+                self._rmv_ep(model, endpoint)
         
     async def pick_endpoint(self, model: str) -> str:
         """
         Return the next endpoint for *model* in round-robin order.
         Raises KeyError if the model is unknown.
         """
-        # quick read outside the big lock ↓
+        # quick read outside the big lock
         bucket = None
         async with self._lock:               # reader section
             bucket = self._instances.get(model)
 
-        if bucket is None:
+        if not bucket:
             raise KeyError(f"No instances for model {model!r}")
 
         return bucket.next()
     
     async def _choose(self, model: str) -> Tuple[str, Dict[str, Any]]:
         """Internal helper: get (endpoint, attrs) or raise 404."""
-        async with self._lock:
-            bucket = self._instances.get(model)
-        if bucket is None:
+        try:
+            return await self.pick_endpoint(model)
+        except KeyError as e:
             raise HTTPException(404, f"Unknown model: {model!r}")
-        return bucket.next()              # (endpoint, {"apikey": …})
 
     async def list_models(self):
         """
@@ -186,7 +208,7 @@ class ProxyService:
                         "object": "model",
                         "created": None,  # Could add timestamp if needed
                         "owned_by": "vllm-proxy"
-                    } for model in sorted(self._instances.keys())
+                    } for model, rrset in sorted(self._instances.items()) if rrset
                 ]
             }
     
