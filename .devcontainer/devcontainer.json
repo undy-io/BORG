@@ -1,0 +1,56 @@
+{
+  "name": "borg-dev",
+  "dockerComposeFile": "docker-compose.yml",
+  "service": "app",
+  "workspaceFolder": "/workspaces/borg",
+  "shutdownAction": "stopCompose",
+
+  "remoteUser": "root",
+  "updateRemoteUserUID": false,
+  "init": true,
+  "containerEnv": {
+    "PIP_DISABLE_PIP_VERSION_CHECK": "1",
+    "PYTHONDONTWRITEBYTECODE": "1",
+    "PYTHONUNBUFFERED": "1"
+  },
+  "features": {
+    "ghcr.io/devcontainers/features/github-cli:1": {}
+  },
+  "customizations": {
+    "vscode": {
+      "settings": {
+        "editor.formatOnSave": true,
+        "editor.codeActionsOnSave": {
+          "source.fixAll": "explicit",
+          "source.organizeImports": "explicit"
+        },
+        "python.defaultInterpreterPath": "/workspaces/borg/.venv/bin/python",
+        "python.terminal.activateEnvironment": true,
+        "python.analysis.typeCheckingMode": "basic",
+        "python.testing.pytestEnabled": true,
+        "python.testing.unittestEnabled": false,
+        "files.exclude": {
+          "**/.mypy_cache": true,
+          "**/.pytest_cache": true,
+          "**/.ruff_cache": true,
+          "**/__pycache__": true
+        }
+      },
+      "extensions": [
+        "OpenAI.chatgpt",
+        "ms-python.python",
+        "ms-python.vscode-pylance",
+        "ms-python.debugpy",
+        "redhat.vscode-yaml",
+        "ms-azuretools.vscode-docker",
+        "github.vscode-github-actions",
+        "ms-ossdata.vscode-pgsql"
+      ]
+    }
+  },
+  "postCreateCommand": "bash .devcontainer/post-create.sh",
+  "postStartCommand": "git config --global --add safe.directory ${containerWorkspaceFolder}",
+  "mounts": [
+      "source=borg-codex-store,target=/root/.codex,type=volume"
+  ]
+}

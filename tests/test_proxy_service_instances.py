@@ -19,10 +19,16 @@ async def _listed_models(svc: ProxyService) -> set[str]:
 @pytest.mark.asyncio
 async def test_add_instance_creates_and_lists(service: ProxyService):
     await service.add_instance("http://e1:8000", "k1", ["m1", "m2"])
-    await service.add_instance("http://e2:8000", "k2", ["m1"])  # m1 now has two endpoints
+    await service.add_instance(
+        "http://e2:8000", "k2", ["m1"]
+    )  # m1 now has two endpoints
 
-    assert "m1" in service._instances and isinstance(service._instances["m1"], RoundRobinSet)
-    assert "m2" in service._instances and isinstance(service._instances["m2"], RoundRobinSet)
+    assert "m1" in service._instances and isinstance(
+        service._instances["m1"], RoundRobinSet
+    )
+    assert "m2" in service._instances and isinstance(
+        service._instances["m2"], RoundRobinSet
+    )
     assert await _listed_models(service) == {"m1", "m2"}
 
 
@@ -59,13 +65,15 @@ async def test_remove_last_endpoint_deletes_model_and_listing(service: ProxyServ
     # Internal helper: pick_endpoint should raise a 404 HTTPException
     with pytest.raises(HTTPException) as ei:
         await service._choose("m1")
-    
+
     assert ei.value.status_code == 404
 
 
 # --- Desired behavior: global remove (models=None) removes endpoint everywhere and cleans up empties ---
 @pytest.mark.asyncio
-async def test_remove_instance_models_none_removes_everywhere_and_cleans_up(service: ProxyService):
+async def test_remove_instance_models_none_removes_everywhere_and_cleans_up(
+    service: ProxyService,
+):
     await service.add_instance("http://e1:8000", "k1", ["m1", "m2", "m3"])
     await service.add_instance("http://e2:8000", "k2", ["m2"])  # m2 has two endpoints
 

@@ -9,29 +9,32 @@ The script reads the *auth_key* from the same JSON config the proxy uses,
 encrypts ``PROXY:<username>`` with AES‑256‑GCM, prefixes the nonce, and outputs
 a URL‑safe base64 token ready to be used as an `Authorization: Bearer` header.
 """
+
 from __future__ import annotations
 
 import argparse
 import base64
 import json
-import yaml
 import secrets
 import sys
 from pathlib import Path
 from typing import Optional
 
+import yaml
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from kubernetes import client, config
 
 NONCE_LEN = 12  # AES‑GCM standard
 
+
 def _init_k8s() -> client.CoreV1Api:
     """Load the local kubeconfig and return a CoreV1Api handle."""
     try:
-        config.load_kube_config()        # honours $KUBECONFIG / ~/.kube/config
-    except Exception as exc:             # noqa: BLE001
+        config.load_kube_config()  # honours $KUBECONFIG / ~/.kube/config
+    except Exception as exc:  # noqa: BLE001
         raise SystemExit(f"[generate_key] cannot load kubeconfig: {exc}") from exc
     return client.CoreV1Api()
+
 
 def _get_config_info(
     v1: client.CoreV1Api,
@@ -57,19 +60,23 @@ def _get_config_info(
 
     try:
         cfg = yaml.safe_load(raw_yaml) or {}
-    except yaml.YAMLError as exc:       # noqa: BLE001
-        print(f"[generate_key] WARNING: cannot parse {name}/config.yaml: {exc}", file=sys.stderr)
+    except yaml.YAMLError as exc:  # noqa: BLE001
+        print(
+            f"[generate_key] WARNING: cannot parse {name}/config.yaml: {exc}",
+            file=sys.stderr,
+        )
         return None, None
 
     borg = cfg.get("borg", {})
     return borg.get("auth_key_from_env"), borg.get("auth_prefix")
+
 
 def _get_key(
     v1: client.CoreV1Api,
     namespace: str,
     release: str,
     key_name: Optional[str] = None,
-    secret_suffix: str = "-auth"
+    secret_suffix: str = "-auth",
 ) -> bytes:
     """
     Load <key_name> from the Secret called "<release><secret_suffix>" in *namespace*.
@@ -99,11 +106,14 @@ def _get_key(
     else:
         # Take the first key (deterministic order in Python ≥3.7)
         key_name, b64 = next(iter(secret.data.items()))
-        print(f"[generate_key] using key '{key_name}' from Secret '{secret_name}'", file=sys.stderr)
-    
+        print(
+            f"[generate_key] using key '{key_name}' from Secret '{secret_name}'",
+            file=sys.stderr,
+        )
+
     try:
         key = base64.b64decode(b64)
-    except Exception as exc:               # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001
         raise SystemExit(
             f"[generate_key] failed to base64-decode Secret data '{key_name}': {exc}",
         ) from exc
@@ -115,22 +125,27 @@ def _get_key(
         )
     return key
 
+
 def _load_key(cfg_path: Path) -> bytes:
     cfg = json.loads(cfg_path.read_text(encoding="utf‑8"))
     try:
         key = base64.urlsafe_b64decode(cfg["auth_key"])
-        prefix = base64.urlsafe_b64decode(cfg["auth_prefix"])
+        base64.urlsafe_b64decode(cfg["auth_prefix"])
     except (KeyError, ValueError) as exc:  # noqa: BLE001
-        raise SystemExit("[generate_key] 'auth_key' missing or invalid in config") from exc
+        raise SystemExit(
+            "[generate_key] 'auth_key' missing or invalid in config"
+        ) from exc
     if len(key) != 32:
         raise SystemExit("[generate_key] auth_key must be 32‑byte AES‑256 key")
     return key
+
 
 def _make_token(username: str, key: bytes, prefix: str) -> str:
     payload = f"{prefix}{username}".encode()
     nonce = secrets.token_bytes(NONCE_LEN)
     ct_tag = AESGCM(key).encrypt(nonce, payload, None)
     return base64.urlsafe_b64encode(nonce + ct_tag).decode()
+
 
 def main() -> None:  # noqa: D401
     ap = argparse.ArgumentParser(
@@ -144,7 +159,9 @@ def main() -> None:  # noqa: D401
 
     # optional overrides
     ap.add_argument("--key-name", "-k", help="Secret data key (overrides ConfigMap)")
-    ap.add_argument("--auth-prefix", help="Prefix for the payload (overrides ConfigMap)")
+    ap.add_argument(
+        "--auth-prefix", help="Prefix for the payload (overrides ConfigMap)"
+    )
     ap.add_argument(
         "--secret-suffix",
         default="-auth",
@@ -168,7 +185,7 @@ def main() -> None:  # noqa: D401
         configmap_suffix=args.configmap_suffix,
     )
 
-    key_name   = args.key_name   or cm_key
+    key_name = args.key_name or cm_key
     auth_prefix = args.auth_prefix or cm_prefix or "PROXY:"
 
     # ── Fetch the AES-256 key ──

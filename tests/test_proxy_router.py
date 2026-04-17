@@ -1,34 +1,40 @@
 # -*- coding: utf-8 -*-
 import base64
 import importlib
-import json
 import os
-from typing import Dict, Any
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+from types import SimpleNamespace
+from typing import Any
 
+import httpx
 import pytest
+import pytest_asyncio
 import yaml
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from fastapi import FastAPI, Request
-from fastapi.testclient import TestClient
-import httpx
 from httpx import ASGITransport, AsyncClient
 from starlette.responses import JSONResponse, StreamingResponse
+
+pytestmark = pytest.mark.asyncio
 
 
 # ---------------------------------------------------------------------------
 # Dynamic import of your app module
 # ---------------------------------------------------------------------------
-# Point this to the module that defines: `app`, `configure(config_path)`, and `proxy`
+# Point this to the module that defines: `app`, `configure(config_path)`, and
+# `create_app(config_path)`.
 # You can override with: export BORG_MAIN_MODULE="your_package.main"
-APP_MODULE_PATH = 'borg.main'
+APP_MODULE_PATH = "borg.main"
 app_module = importlib.import_module(APP_MODULE_PATH)
-configure = getattr(app_module, "configure")
-proxy = getattr(app_module, "proxy")
+create_app = getattr(app_module, "create_app")
+proxy_module = importlib.import_module("borg.proxy")
 
 
 # ---------------------------------------------------------------------------
 # Helpers / fixtures
 # ---------------------------------------------------------------------------
+
 
 @pytest.fixture
 def fake_upstream_app() -> FastAPI:
@@ -46,19 +52,23 @@ def fake_upstream_app() -> FastAPI:
 
         # Streaming if either Accept contains text/event-stream or body.stream == True
         if "text/event-stream" in accept or body.get("stream"):
+
             async def gen():
                 yield b'data: {"id":"mock-1","object":"chat.completion.chunk","choices":[{"delta":{"content":"Hi"}}]}\n\n'
                 yield b'data: {"id":"mock-1","object":"chat.completion.chunk","choices":[{"delta":{"content":"!"}}]}\n\n'
-                yield b'data: [DONE]\n\n'
+                yield b"data: [DONE]\n\n"
+
             return StreamingResponse(gen(), media_type="text/event-stream")
 
         # Non-stream JSON echo
-        return JSONResponse({
-            "upstream": "ok",
-            "received": body,
-            "auth": req.headers.get("authorization"),
-            "content_type": req.headers.get("content-type"),
-        })
+        return JSONResponse(
+            {
+                "upstream": "ok",
+                "received": body,
+                "auth": req.headers.get("authorization"),
+                "content_type": req.headers.get("content-type"),
+            }
+        )
 
     return app
 
@@ -69,81 +79,91 @@ def patch_httpx_to_upstream(monkeypatch, fake_upstream_app):
     Patch httpx.AsyncClient used inside the ProxyService so any outgoing HTTP
     goes to our fake_upstream_app instead of the network.
     """
+
     def factory(*args, **kwargs) -> AsyncClient:  # noqa: ANN001
-        # Route all requests (any host) to the ASGI app
+        # Route all requests (any host) to the ASGI app.
         transport = ASGITransport(app=fake_upstream_app)
-        # Use a base_url that matches your configured endpoint host (e.g., "http://upstream")
+        # Use a base_url that matches your configured endpoint host (e.g., "http://upstream").
         return AsyncClient(transport=transport, base_url="http://upstream")
-    monkeypatch.setattr(httpx, "AsyncClient", factory)
+
+    fake_httpx = SimpleNamespace(
+        AsyncClient=factory,
+        StreamClosed=httpx.StreamClosed,
+    )
+    monkeypatch.setattr(proxy_module, "httpx", fake_httpx)
 
 
 def _write_config(
     tmp_path,
     *,
+    filename: str = "config.yaml",
     instances: list[dict[str, Any]] | None = None,
     update_interval: int = -1,
     auth_key_b64: str | None = None,
     auth_prefix: str | None = None,
+    k8s_discover: list[dict[str, Any]] | None = None,
 ) -> str:
-    borg: Dict[str, Any] = {
-        "instances": instances or [{
-            "endpoint": "http://upstream",
-            "apikey": "sk-test",
-            "models": ["openai/gpt-oss-20b"],
-        }],
+    borg: dict[str, Any] = {
+        "instances": instances
+        or [
+            {
+                "endpoint": "http://upstream",
+                "apikey": "sk-test",
+                "models": ["openai/gpt-oss-20b"],
+            }
+        ],
         "update_interval": update_interval,
     }
     if auth_key_b64 is not None:
         borg["auth_key"] = auth_key_b64
     if auth_prefix is not None:
         borg["auth_prefix"] = auth_prefix
+    if k8s_discover is not None:
+        borg["k8s_discover"] = k8s_discover
 
-    path = tmp_path / "config.yaml"
+    path = tmp_path / filename
     path.write_text(yaml.safe_dump({"borg": borg}), encoding="utf-8")
     return str(path)
 
 
-@pytest.fixture
-def client_noauth(tmp_path, monkeypatch, patch_httpx_to_upstream):
+@asynccontextmanager
+async def _client_for_config(config_path: str) -> AsyncIterator[AsyncClient]:
+    app = create_app(config_path)
+    async with app.router.lifespan_context(app):
+        transport = ASGITransport(app=app)
+        async with AsyncClient(
+            transport=transport, base_url="http://testserver"
+        ) as client:
+            yield client
+
+
+@pytest_asyncio.fixture
+async def client_noauth(tmp_path, monkeypatch, patch_httpx_to_upstream):
     """
     App client with auth DISABLED (auth_key is EMPTY). Good for baseline tests.
     """
-    # Ensure no stray AUTH_KEY in env affects the run
+    # Ensure no stray AUTH_KEY in env affects the run.
     monkeypatch.delenv("AUTH_KEY", raising=False)
 
-    # Reset global state for clean runs
-    proxy._instances.clear()
-    if hasattr(app_module, "services"):
-        app_module.services.clear()
-
     cfg = _write_config(tmp_path)  # no auth by default
-    app = configure(cfg)
-    with TestClient(app) as client:
+    async with _client_for_config(cfg) as client:
         yield client
 
 
-@pytest.fixture
-def client_with_auth(tmp_path, monkeypatch, patch_httpx_to_upstream):
+@pytest_asyncio.fixture
+async def client_with_auth(tmp_path, monkeypatch, patch_httpx_to_upstream):
     """
     App client with auth ENABLED; creates a 32-byte key and sets AUTH_KEY env var.
     """
-    # 32-byte AES key (all zeros for reproducible tests)
+    # 32-byte AES key (all zeros for reproducible tests).
     key_bytes = b"\x00" * 32
     key_b64 = base64.urlsafe_b64encode(key_bytes).decode()
 
-    # Reset global state
-    proxy._instances.clear()
-    if hasattr(app_module, "services"):
-        app_module.services.clear()
-
-    # Make sure the app reads our key from env (overrides config)
+    # Make sure the app reads our key from env (overrides config).
     monkeypatch.setenv("AUTH_KEY", key_b64)
 
     cfg = _write_config(tmp_path, auth_prefix="BORG:")  # prefix will be set
-    app = configure(cfg)
-
-    # Return both the client and the key so tests can mint tokens
-    with TestClient(app) as client:
+    async with _client_for_config(cfg) as client:
         yield client, key_bytes
 
 
@@ -151,24 +171,25 @@ def client_with_auth(tmp_path, monkeypatch, patch_httpx_to_upstream):
 # Tests
 # ---------------------------------------------------------------------------
 
-def test_root_ok(client_noauth: TestClient):
-    r = client_noauth.get("/")
-    assert r.status_code == 200
-    data = r.json()
+
+async def test_root_ok(client_noauth: AsyncClient):
+    response = await client_noauth.get("/")
+    assert response.status_code == 200
+    data = response.json()
     assert data["status"] == "ok"
     assert "Proxy router is running" in data["detail"]
 
 
-def test_list_models(client_noauth: TestClient):
-    r = client_noauth.get("/v1/models")
-    assert r.status_code == 200
-    data = r.json()
+async def test_list_models(client_noauth: AsyncClient):
+    response = await client_noauth.get("/v1/models")
+    assert response.status_code == 200
+    data = response.json()
     assert data["object"] == "list"
-    ids = [m["id"] for m in data["data"]]
+    ids = [model["id"] for model in data["data"]]
     assert "openai/gpt-oss-20b" in ids
 
 
-def test_proxy_forwards_and_swaps_auth_header(client_noauth: TestClient):
+async def test_proxy_forwards_and_swaps_auth_header(client_noauth: AsyncClient):
     payload = {
         "model": "openai/gpt-oss-20b",
         "messages": [
@@ -176,44 +197,52 @@ def test_proxy_forwards_and_swaps_auth_header(client_noauth: TestClient):
             {"role": "user", "content": "Who won the world series in 2020?"},
         ],
     }
-    r = client_noauth.post("/v1/chat/completions", json=payload)
-    assert r.status_code == 200
-    data = r.json()
-    # The proxy should replace the inbound Authorization with backend apikey
+    response = await client_noauth.post("/v1/chat/completions", json=payload)
+    assert response.status_code == 200
+    data = response.json()
+    # The proxy should replace the inbound Authorization with backend apikey.
     assert data["auth"] == "Bearer sk-test"
     assert data["received"] == payload
     assert data["content_type"] == "application/json"
 
-def test_proxy_streaming_via_stream_flag(client_noauth: TestClient):
+
+async def test_proxy_streaming_via_stream_flag(client_noauth: AsyncClient):
     payload = {
         "model": "openai/gpt-oss-20b",
         "stream": True,  # should force streaming path
         "messages": [{"role": "user", "content": "Hello"}],
     }
-    with client_noauth.stream("POST", "/v1/chat/completions", json=payload) as r:
-        assert r.status_code == 200
-        # Gather the SSE stream into a single string
-        text = "".join([chunk.decode() for chunk in r.iter_raw()])
+    async with client_noauth.stream(
+        "POST", "/v1/chat/completions", json=payload
+    ) as response:
+        assert response.status_code == 200
+        text = "".join([chunk.decode() async for chunk in response.aiter_raw()])
         assert "[DONE]" in text
 
-def test_proxy_streaming_via_accept_header(client_noauth: TestClient):
+
+async def test_proxy_streaming_via_accept_header(client_noauth: AsyncClient):
     payload = {
         "model": "openai/gpt-oss-20b",
         "messages": [{"role": "user", "content": "Hello"}],
     }
     headers = {"Accept": "text/event-stream; charset=utf-8"}
-    with client_noauth.stream("POST", "/v1/chat/completions", json=payload, headers=headers) as r:
-        assert r.status_code == 200
-        text = "".join([chunk.decode() for chunk in r.iter_raw()])
+    async with client_noauth.stream(
+        "POST", "/v1/chat/completions", json=payload, headers=headers
+    ) as response:
+        assert response.status_code == 200
+        text = "".join([chunk.decode() async for chunk in response.aiter_raw()])
         assert "[DONE]" in text
 
 
-def test_unknown_model_returns_404(client_noauth: TestClient):
-    payload = {"model": "totally-unknown-model", "messages": [{"role": "user", "content": "Hi"}]}
-    r = client_noauth.post("/v1/chat/completions", json=payload)
-    assert r.status_code == 404
-    # ProxyService should raise an HTTPException with detail mentioning the model
-    assert "Unknown model" in r.text
+async def test_unknown_model_returns_404(client_noauth: AsyncClient):
+    payload = {
+        "model": "totally-unknown-model",
+        "messages": [{"role": "user", "content": "Hi"}],
+    }
+    response = await client_noauth.post("/v1/chat/completions", json=payload)
+    assert response.status_code == 404
+    # ProxyService should raise an HTTPException with detail mentioning the model.
+    assert "Unknown model" in response.text
 
 
 def _mint_auth_token(key_bytes: bytes, prefix: str, username: str) -> str:
@@ -222,36 +251,155 @@ def _mint_auth_token(key_bytes: bytes, prefix: str, username: str) -> str:
     token = base64url( nonce(12) || AESGCM(nonce, plaintext, None) )
     where plaintext = f"{prefix}{username}".encode()
     """
-    import os as _os
-    nonce = _os.urandom(12)
+    nonce = os.urandom(12)
     plaintext = f"{prefix}{username}".encode()
     ct = AESGCM(key_bytes).encrypt(nonce, plaintext, None)
     return base64.urlsafe_b64encode(nonce + ct).decode()
 
 
-def test_auth_enforced_when_configured(client_with_auth):
+async def test_auth_enforced_when_configured(client_with_auth):
     client, key_bytes = client_with_auth
 
-    # No Authorization -> 401
-    payload = {"model": "openai/gpt-oss-20b", "messages": [{"role": "user", "content": "Hi"}]}
-    r1 = client.post("/v1/chat/completions", json=payload)
-    assert r1.status_code == 401
+    # No Authorization -> 401.
+    payload = {
+        "model": "openai/gpt-oss-20b",
+        "messages": [{"role": "user", "content": "Hi"}],
+    }
+    response_no_auth = await client.post("/v1/chat/completions", json=payload)
+    assert response_no_auth.status_code == 401
 
-    # Bad Authorization format -> 401
-    r2 = client.post(
+    # Bad Authorization format -> 401.
+    response_bad_auth = await client.post(
         "/v1/chat/completions",
         json=payload,
         headers={"Authorization": "Bearer not-a-valid-token"},
     )
-    assert r2.status_code == 401
+    assert response_bad_auth.status_code == 401
 
-    # Valid token -> 200
+    # Valid token -> 200.
     token = _mint_auth_token(key_bytes, "BORG:", "alice")
-    r3 = client.post(
+    response_ok = await client.post(
         "/v1/chat/completions",
         json=payload,
         headers={"Authorization": f"Bearer {token}"},
     )
-    assert r3.status_code == 200
-    data = r3.json()
+    assert response_ok.status_code == 200
+    data = response_ok.json()
     assert data["auth"] == "Bearer sk-test"
+
+
+async def test_factory_apps_isolate_auth_and_models(
+    tmp_path, monkeypatch, patch_httpx_to_upstream
+):
+    monkeypatch.delenv("AUTH_KEY", raising=False)
+
+    auth_key = b"\x01" * 32
+    auth_key_b64 = base64.urlsafe_b64encode(auth_key).decode()
+    auth_cfg = _write_config(
+        tmp_path,
+        filename="auth.yaml",
+        instances=[
+            {
+                "endpoint": "http://upstream",
+                "apikey": "sk-test",
+                "models": ["isolated-auth-model"],
+            }
+        ],
+        auth_key_b64=auth_key_b64,
+        auth_prefix="BORG:",
+    )
+    noauth_cfg = _write_config(
+        tmp_path,
+        filename="noauth.yaml",
+        instances=[
+            {
+                "endpoint": "http://upstream",
+                "apikey": "sk-test",
+                "models": ["isolated-noauth-model"],
+            }
+        ],
+    )
+
+    async with _client_for_config(auth_cfg) as auth_client:
+        auth_models = await auth_client.get("/v1/models")
+        assert auth_models.status_code == 200
+        assert auth_models.json()["data"] == [
+            {
+                "id": "isolated-auth-model",
+                "object": "model",
+                "created": None,
+                "owned_by": "vllm-proxy",
+            }
+        ]
+
+        denied = await auth_client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "isolated-auth-model",
+                "messages": [{"role": "user", "content": "Hello"}],
+            },
+        )
+        assert denied.status_code == 401
+
+        token = _mint_auth_token(auth_key, "BORG:", "alice")
+        allowed = await auth_client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "isolated-auth-model",
+                "messages": [{"role": "user", "content": "Hello"}],
+            },
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert allowed.status_code == 200
+
+    async with _client_for_config(noauth_cfg) as noauth_client:
+        noauth_models = await noauth_client.get("/v1/models")
+        assert noauth_models.status_code == 200
+        assert noauth_models.json()["data"] == [
+            {
+                "id": "isolated-noauth-model",
+                "object": "model",
+                "created": None,
+                "owned_by": "vllm-proxy",
+            }
+        ]
+
+        allowed = await noauth_client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "isolated-noauth-model",
+                "messages": [{"role": "user", "content": "Hello"}],
+            },
+        )
+        assert allowed.status_code == 200
+
+
+async def test_discovery_init_failure_is_logged_once(tmp_path, monkeypatch, caplog):
+    monkeypatch.delenv("AUTH_KEY", raising=False)
+
+    k8s_discovery = importlib.import_module("borg.k8s_discovery")
+
+    def fail_k8s_init(*args, **kwargs):  # noqa: ANN001, ARG001
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(k8s_discovery, "K8SDiscoveryService", fail_k8s_init)
+    app = create_app(
+        _write_config(
+            tmp_path,
+            update_interval=30,
+            k8s_discover=[{"namespace": "default", "selector": "app=test"}],
+        )
+    )
+
+    caplog.clear()
+    with caplog.at_level("ERROR", logger=APP_MODULE_PATH):
+        async with app.router.lifespan_context(app):
+            assert app.state.services == []
+
+    records = [
+        record
+        for record in caplog.records
+        if record.name == APP_MODULE_PATH
+        and record.message == "Failed to load k8s discovery service"
+    ]
+    assert len(records) == 1

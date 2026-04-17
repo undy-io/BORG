@@ -1,4 +1,3 @@
-
 # 🛰️ BORG — Kubernetes‑aware OpenAI Load‑Balancing Proxy
 
 ## NOTE If you couldn't tell from all the unicode icons, this is AI generated so may have errors. At some point I'll care and fix it.
@@ -25,14 +24,14 @@
 
 ## 🚀 Quick start
 
-### 1 – Run locally with Poetry
+### 1 – Run locally with uv
 
 ```bash
 git clone https://github.com/undy-io/BORG.git
 cd BORG
-poetry install --no-root
-cp config.example.yaml config.yaml      # edit at will
-poetry run uvicorn borg.main:app --reload
+uv sync --frozen
+cp config.example.yaml config.yaml
+uv run borg --reload
 ```
 
 ### 2 – Docker
@@ -120,7 +119,10 @@ Key values
 ## 🧪 Testing
 
 ```bash
-pytest -q
+uv run pytest -q
+uv run mypy src
+uv run ruff check .
+uv run ruff format --check .
 ```
 
 Unit tests live under `tests/`.
@@ -129,18 +131,18 @@ Unit tests live under `tests/`.
 
 ## 📦 Release workflow
 
-* Pushes to **master** build `:edge` and `:sha-<short>` images.
+* Pushes and pull requests run Python CI from `.github/workflows/python.yml`.
+* Pushes to **master** build `:edge` and `:sha-<short>` images from `.github/workflows/docker.yml`.
 * Tagging `vX.Y.Z` also produces `:latest`, `:X.Y`, and `:X.Y.Z` tags.
-* CI pipeline lives in `.github/workflows/docker.yml`.
 
 ---
 
 ## 🤝 Contributing
 
 1. Fork & clone
-2. `poetry install`
+2. `uv sync --frozen`
 3. Make changes, add tests
-4. `pre-commit run -a` (black, isort, flake8, mypy)
+4. Run `uv run pytest`, `uv run mypy src`, `uv run ruff check .`, and `uv run ruff format --check .`
 5. PR against **master**
 
 ---
