@@ -102,20 +102,31 @@ def _get_key(
             raise SystemExit(
                 f"[generate_key] key '{key_name}' not found in Secret '{secret_name}'",
             )
-        b64 = secret.data[key_name]
+        secret_data_b64 = secret.data[key_name]
     else:
         # Take the first key (deterministic order in Python ≥3.7)
-        key_name, b64 = next(iter(secret.data.items()))
+        key_name, secret_data_b64 = next(iter(secret.data.items()))
         print(
             f"[generate_key] using key '{key_name}' from Secret '{secret_name}'",
             file=sys.stderr,
         )
 
     try:
-        key = base64.b64decode(b64)
+        secret_bytes = base64.b64decode(secret_data_b64)
     except Exception as exc:  # noqa: BLE001
         raise SystemExit(
             f"[generate_key] failed to base64-decode Secret data '{key_name}': {exc}",
+        ) from exc
+
+    if len(secret_bytes) == 32:
+        return secret_bytes
+
+    try:
+        key = base64.urlsafe_b64decode(secret_bytes)
+    except Exception as exc:  # noqa: BLE001
+        raise SystemExit(
+            "[generate_key] secret data did not contain a raw AES key or a "
+            "printable base64/base64url auth key string"
         ) from exc
 
     if len(key) != 32:

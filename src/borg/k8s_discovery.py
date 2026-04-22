@@ -88,43 +88,43 @@ class K8SDiscoveryService:
         Discover pods in the Kubernetes cluster
         """
         try:
-            # Find pods with the vllm label
             pods = self.k8s_core_v1.list_namespaced_pod(
                 namespace=namespace, label_selector=selector
             )
-
-            for pod in pods.items:
-                # Check pod status
-                if pod.status.phase != "Running":
-                    continue
-
-                pod_ip = pod.status.pod_ip
-                annotations = pod.metadata.annotations
-
-                if not annotations:
-                    continue
-
-                models = None
-                if modelkey is not None:
-                    models = annotations.get(modelkey, "").split(",")
-                    models = list(filter(None, models))
-
-                protocol = annotations.get("borg/protocol", "http")
-                apibase = annotations.get("borg/apibase", "")
-                apiport = annotations.get("borg/apiport", "8000")
-
-                endpoint = f"{protocol}://{pod_ip}:{apiport}{apibase}"
-
-                if not models and automodel:
-                    logger.info(f"Querying {endpoint} for models")
-                    models = await K8SDiscoveryService._enum_models(endpoint)
-
-                if not models:
-                    continue
-
-                yield Endpoint(endpoint=endpoint, models=models, apikey="EMPTY")
         except Exception:
             logger.exception("Error discovering vLLM instances")
+            raise
+
+        for pod in pods.items:
+            # Check pod status
+            if pod.status.phase != "Running":
+                continue
+
+            pod_ip = pod.status.pod_ip
+            annotations = pod.metadata.annotations
+
+            if not annotations:
+                continue
+
+            models = None
+            if modelkey is not None:
+                models = annotations.get(modelkey, "").split(",")
+                models = list(filter(None, models))
+
+            protocol = annotations.get("borg/protocol", "http")
+            apibase = annotations.get("borg/apibase", "")
+            apiport = annotations.get("borg/apiport", "8000")
+
+            endpoint = f"{protocol}://{pod_ip}:{apiport}{apibase}"
+
+            if not models and automodel:
+                logger.info(f"Querying {endpoint} for models")
+                models = await K8SDiscoveryService._enum_models(endpoint)
+
+            if not models:
+                continue
+
+            yield Endpoint(endpoint=endpoint, models=models, apikey="EMPTY")
 
     async def discover(self, automodel: bool = True) -> AsyncGenerator[Endpoint, None]:
         for selector in self._selectors:
@@ -155,11 +155,17 @@ class K8SDiscoveryService:
 
         epmap: dict[str, set[str]] = {}
 
-        async for ep in self.discover():
-            for m in ep.models:
-                if m not in epmap:  # Something is wrong here, m is a dict not a string?
-                    epmap[m] = set()
-                epmap[m].add(ep.endpoint)
+        try:
+            async for ep in self.discover():
+                for model in ep.models:
+                    if model not in epmap:
+                        epmap[model] = set()
+                    epmap[model].add(ep.endpoint)
+        except Exception:
+            logger.warning(
+                "Discovery refresh failed; preserving previous endpoint snapshot"
+            )
+            return
 
         add = K8SDiscoveryService._epdiff(epmap, self._epmap)
         rmv = K8SDiscoveryService._epdiff(self._epmap, epmap)

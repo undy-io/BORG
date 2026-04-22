@@ -237,20 +237,18 @@ class TestK8SDiscoveryService:
 
     @pytest.mark.asyncio
     async def test_discover_kubernetes_error(self, mock_service):
-        """Test discovery handles Kubernetes API errors"""
-        # Mock logger to avoid NameError
+        """Test discovery surfaces Kubernetes API errors after logging"""
         with patch("borg.k8s_discovery.logger") as mock_logger:
             mock_service.k8s_core_v1.list_namespaced_pod.side_effect = Exception(
                 "API Error"
             )
 
-            endpoints = []
-            async for endpoint in mock_service._discover(
-                namespace="default", selector="app=vllm", modelkey="models"
-            ):
-                endpoints.append(endpoint)
+            with pytest.raises(Exception, match="API Error"):
+                async for _ in mock_service._discover(
+                    namespace="default", selector="app=vllm", modelkey="models"
+                ):
+                    pass
 
-            assert len(endpoints) == 0
             mock_logger.exception.assert_called_once_with(
                 "Error discovering vLLM instances"
             )
@@ -303,37 +301,72 @@ class TestK8SDiscoveryService:
         assert result == {}
 
     @pytest.mark.asyncio
-    async def test_update_method(self, mock_service):
-        """Test update method with proxy integration"""
-        # Mock the discover method
+    async def test_update_applies_authoritative_snapshot(self, mock_service):
+        """Test update reconciles add/remove changes from a successful refresh"""
         mock_endpoints = [
             Endpoint("http://endpoint1:8000/v1/models", ["model1"], "EMPTY"),
-            Endpoint("http://endpoint2:8000/v1/models", ["model2"], "EMPTY"),
+            Endpoint("http://endpoint3:8000/v1/models", ["model3"], "EMPTY"),
         ]
 
         with patch.object(mock_service, "discover") as mock_discover:
-            # Create async iterator mock
             async def mock_async_iter():
                 for endpoint in mock_endpoints:
                     yield endpoint
 
             mock_discover.return_value = mock_async_iter()
 
-            # Mock proxy
             mock_proxy = Mock()
             mock_proxy.add_instance = AsyncMock()
             mock_proxy.remove_instance = AsyncMock()
 
-            # Set initial state
-            mock_service._epmap = {}
+            mock_service._epmap = {
+                "model1": {"http://endpoint1:8000/v1/models"},
+                "model2": {"http://endpoint2:8000/v1/models"},
+            }
 
             await mock_service.update(mock_proxy)
 
-            # Note: The test may need adjustment based on the actual logic
-            # The current implementation has bugs that need to be fixed in the source code
-
-            # At minimum, verify discovery was called
             mock_discover.assert_called_once()
+            mock_proxy.remove_instance.assert_awaited_once_with(
+                "http://endpoint2:8000/v1/models", models=["model2"]
+            )
+            mock_proxy.add_instance.assert_awaited_once_with(
+                "http://endpoint3:8000/v1/models", "EMPTY", models=["model3"]
+            )
+            assert mock_service._epmap == {
+                "model1": {"http://endpoint1:8000/v1/models"},
+                "model3": {"http://endpoint3:8000/v1/models"},
+            }
+
+    @pytest.mark.asyncio
+    async def test_update_preserves_snapshot_on_discovery_failure(self, mock_service):
+        """Test failed discovery does not evict or mutate the last good snapshot"""
+        with (
+            patch.object(mock_service, "discover") as mock_discover,
+            patch("borg.k8s_discovery.logger") as mock_logger,
+        ):
+            previous_epmap = {"model1": {"http://endpoint1:8000/v1/models"}}
+            mock_service._epmap = previous_epmap.copy()
+
+            async def mock_failing_iter():
+                yield Endpoint("http://endpoint2:8000/v1/models", ["model2"], "EMPTY")
+                raise RuntimeError("boom")
+
+            mock_discover.return_value = mock_failing_iter()
+
+            mock_proxy = Mock()
+            mock_proxy.add_instance = AsyncMock()
+            mock_proxy.remove_instance = AsyncMock()
+
+            await mock_service.update(mock_proxy)
+
+            mock_discover.assert_called_once()
+            mock_proxy.add_instance.assert_not_awaited()
+            mock_proxy.remove_instance.assert_not_awaited()
+            assert mock_service._epmap == previous_epmap
+            mock_logger.warning.assert_called_once_with(
+                "Discovery refresh failed; preserving previous endpoint snapshot"
+            )
 
 
 class TestIntegration:

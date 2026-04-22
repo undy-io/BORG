@@ -41,6 +41,8 @@ from pydantic import BaseModel
 from .proxy import ProxyService  # local module containing the class built earlier
 
 API_KEY_ENV = "API_KEY"
+AUTH_KEY_ENV = "AUTH_KEY"
+LEGACY_AUTH_KEY_ENV = "BORG_AUTH_KEY"
 DEFAULT_KEY_VAL = "EMPTY"
 
 logging.basicConfig(
@@ -136,7 +138,11 @@ def create_app(config_path: str | None = None) -> FastAPI:
         cfg = cfg_data.get("borg", {})
 
         # ─── auth key ───
-        auth_key = os.getenv("AUTH_KEY", cfg.get("auth_key", "EMPTY"))
+        auth_key = (
+            os.getenv(AUTH_KEY_ENV)
+            or os.getenv(LEGACY_AUTH_KEY_ENV)
+            or cfg.get("auth_key", "EMPTY")
+        )
         app.state.auth_key = (
             base64.urlsafe_b64decode(auth_key) if auth_key != "EMPTY" else None
         )

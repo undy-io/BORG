@@ -16,7 +16,7 @@
 | **Zero‑config discovery** | Finds pods matching a label selector and registers their models automatically      |
 | **Multi‑backend fan‑out** | Routes any `/v1/*` call to the next healthy backend and returns the first success  |
 | **Model union**           | `GET /v1/models` merges all discovered models                                      |
-| **Pluggable auth**        | Optional AES‑256 request signing (`auth_key`) and prefix rewriting (`auth_prefix`) |
+| **Pluggable auth**        | Optional AES‑256 request signing (`auth_key`) and token prefix validation (`auth_prefix`) |
 | **Lightweight**           | FastAPI + uvicorn on Python 3.12‑slim (< 40 MB image)                              |
 | **Helm chart & CI**       | One‑line `helm upgrade` and GitHub Actions pipeline to GHCR                        |
 
@@ -68,7 +68,7 @@ helm upgrade --install borg charts/borg \
 # config.yaml
 borg:
   auth_key: "EMPTY"                # base64‑url 32‑byte AES‑256 key
-  auth_prefix: "BORG:"             # prefix rewritten into Authorization
+  auth_prefix: "BORG:"             # plaintext prefix embedded in issued bearer tokens
   update_interval: 30               # seconds between K8s discovery passes
 
   # Static back‑ends

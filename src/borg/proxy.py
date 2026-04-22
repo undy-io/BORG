@@ -56,7 +56,7 @@ class ProxyService:
         self,
         namespace: str = "default",
         auth_key: bytes | None = None,
-        auth_prefix: str | None = "Proxy:",
+        auth_prefix: str | None = "PROXY:",
         api_prefix: str = "Bearer ",
     ) -> None:
         """
@@ -374,13 +374,20 @@ class ProxyService:
         raw_body = await request.body()
 
         try:
-            body: dict[str, Any] = json.loads(raw_body)
+            parsed_body = json.loads(raw_body)
         except (
             json.JSONDecodeError
         ) as exc:  # pragma: no cover — FastAPI already validates
             raise HTTPException(
                 status.HTTP_400_BAD_REQUEST, "Body must be valid JSON"
             ) from exc
+
+        if not isinstance(parsed_body, dict):
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST, "Body must be valid JSON"
+            )
+
+        body: dict[str, Any] = parsed_body
 
         model = body.get("model")
         if not model:

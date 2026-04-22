@@ -22,7 +22,11 @@
       "additionalProperties": false,
       "properties": {
         "name": { "type": "string" },
-        "key":  { "type": "string" }
+        "key":  { "type": "string" },
+        "value": {
+          "type": "string",
+          "description": "Optional printable auth key string to store in the secret"
+        }
       },
       "required": ["name", "key"]
     },

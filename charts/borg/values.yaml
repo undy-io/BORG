@@ -8,6 +8,9 @@ image:
 authKeySecret:
   name: borg-auth
   key: BORG_AUTH_KEY
+  # Optional raw auth key string. This should be the printable base64/base64url
+  # value the app consumes, not a Secret.data-encoded blob.
+  # value: ""
 
 apikeySecrets:
   name: borg-apikeys

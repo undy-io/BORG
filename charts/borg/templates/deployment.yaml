@@ -34,7 +34,7 @@ spec:
               value: "{{ .Values.service.targetPort }}"
             - name: PROXY_CONFIG
               value: /app/config.yaml
-            - name: BORG_AUTH_KEY
+            - name: AUTH_KEY
               valueFrom:
                 secretKeyRef:
                   name: {{ .Values.authKeySecret.name }}

@@ -245,6 +245,38 @@ async def test_unknown_model_returns_404(client_noauth: AsyncClient):
     assert "Unknown model" in response.text
 
 
+async def test_proxy_rejects_invalid_json_body(client_noauth: AsyncClient):
+    response = await client_noauth.post(
+        "/v1/chat/completions",
+        content=b"{not-json",
+        headers={"Content-Type": "application/json"},
+    )
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Body must be valid JSON"
+
+
+@pytest.mark.parametrize("body", [b"[]", b"null", b'"text"'])
+async def test_proxy_rejects_non_object_json_body(
+    client_noauth: AsyncClient, body: bytes
+):
+    response = await client_noauth.post(
+        "/v1/chat/completions",
+        content=body,
+        headers={"Content-Type": "application/json"},
+    )
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Body must be valid JSON"
+
+
+async def test_proxy_rejects_missing_model_in_body(client_noauth: AsyncClient):
+    response = await client_noauth.post(
+        "/v1/chat/completions",
+        json={"messages": [{"role": "user", "content": "Hi"}]},
+    )
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Missing 'model' in request body"
+
+
 def _mint_auth_token(key_bytes: bytes, prefix: str, username: str) -> str:
     """
     Make a URL-safe base64 token matching ProxyService._decrypt_token() expectations:
@@ -267,14 +299,25 @@ async def test_auth_enforced_when_configured(client_with_auth):
     }
     response_no_auth = await client.post("/v1/chat/completions", json=payload)
     assert response_no_auth.status_code == 401
+    assert response_no_auth.json()["detail"] == "Missing API key"
 
-    # Bad Authorization format -> 401.
-    response_bad_auth = await client.post(
+    # Non-bearer Authorization -> 401.
+    response_non_bearer_auth = await client.post(
+        "/v1/chat/completions",
+        json=payload,
+        headers={"Authorization": "Token not-a-bearer-token"},
+    )
+    assert response_non_bearer_auth.status_code == 401
+    assert response_non_bearer_auth.json()["detail"] == "Missing API key"
+
+    # Malformed bearer token -> 401.
+    response_bad_bearer = await client.post(
         "/v1/chat/completions",
         json=payload,
         headers={"Authorization": "Bearer not-a-valid-token"},
     )
-    assert response_bad_auth.status_code == 401
+    assert response_bad_bearer.status_code == 401
+    assert response_bad_bearer.json()["detail"] == "Invalid API key"
 
     # Valid token -> 200.
     token = _mint_auth_token(key_bytes, "BORG:", "alice")
@@ -286,6 +329,43 @@ async def test_auth_enforced_when_configured(client_with_auth):
     assert response_ok.status_code == 200
     data = response_ok.json()
     assert data["auth"] == "Bearer sk-test"
+
+
+async def test_default_auth_prefix_is_proxy_uppercase(
+    tmp_path, monkeypatch, patch_httpx_to_upstream
+):
+    monkeypatch.delenv("AUTH_KEY", raising=False)
+    monkeypatch.delenv("BORG_AUTH_KEY", raising=False)
+
+    auth_key = b"\x03" * 32
+    auth_key_b64 = base64.urlsafe_b64encode(auth_key).decode()
+    cfg = _write_config(
+        tmp_path,
+        filename="default-prefix.yaml",
+        auth_key_b64=auth_key_b64,
+    )
+
+    payload = {
+        "model": "openai/gpt-oss-20b",
+        "messages": [{"role": "user", "content": "Hello"}],
+    }
+
+    async with _client_for_config(cfg) as client:
+        proxy_token = _mint_auth_token(auth_key, "PROXY:", "alice")
+        proxy_response = await client.post(
+            "/v1/chat/completions",
+            json=payload,
+            headers={"Authorization": f"Bearer {proxy_token}"},
+        )
+        assert proxy_response.status_code == 200
+
+        buggy_token = _mint_auth_token(auth_key, "Proxy:", "alice")
+        buggy_response = await client.post(
+            "/v1/chat/completions",
+            json=payload,
+            headers={"Authorization": f"Bearer {buggy_token}"},
+        )
+        assert buggy_response.status_code == 401
 
 
 async def test_factory_apps_isolate_auth_and_models(
