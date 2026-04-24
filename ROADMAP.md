@@ -5,6 +5,12 @@ Migrate BORG from Python to Go using a side-by-side strategy that preserves curr
 
 The Python implementation remains the reference service until the Go implementation has proven feature and operational parity.
 
+## Current Status
+- Milestone 1 is complete.
+- The Python contract is frozen in `docs/migration/`.
+- The first Go core proxy implementation has been added beside the Python reference.
+- The remaining Milestone 2 work is local hardening and side-by-side validation before moving on to discovery/tooling.
+
 ## Working Model
 - This roadmap stays high level and milestone-oriented.
 - We will work one milestone at a time.
@@ -42,11 +48,17 @@ Outcomes:
 - Stand up a minimal Go HTTP service with health/basic endpoints and configuration loading.
 - Establish the internal structure for router, proxy, auth, discovery, and CLI/tooling code.
 - Make the Go service runnable beside the Python service in local development.
+- Keep the Python implementation, tests, Dockerfile, and Helm chart in place as the reference path.
 
 Exit criteria:
 - The repo can build and run the Go service independently.
 - The Go codebase has a stable structure we can extend without reworking foundations.
 - Local development flow is clear for both Python and Go during the migration window.
+
+Layout target:
+- The planned Go tree is documented in `docs/migration/go-project-layout.md`.
+- The primary service entrypoint should live at `cmd/borg` and build to `bin/borg-go` during migration.
+- Application internals should live under `internal/`.
 
 ## Milestone 3: Reach Request Path Parity
 Port the core proxy behavior that makes BORG useful as an OpenAI-compatible router.

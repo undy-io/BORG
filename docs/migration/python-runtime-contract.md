@@ -134,13 +134,14 @@ Validation behavior in `ProxyService.require_auth()`:
 `genkey.py` currently accepts two Secret data formats when reading the auth key:
 
 - Legacy raw 32-byte key material stored in Secret data
-- Printable base64/base64url auth key text stored in Secret data
+- Printable URL-safe base64 auth key text stored in Secret data
 
 Observed from tests:
 - `tests/test_genkey.py` verifies both formats are accepted.
 
 Migration implication:
-- The Go token tooling should preserve both secret formats unless we deliberately normalize this before cutover.
+- Helm normalizes legacy raw-byte secrets and generated auth keys to URL-safe base64 text.
+- The Go runtime intentionally accepts URL-safe base64 auth keys only.
 
 ## App Construction Contract
 - `create_app(config_path)` returns an isolated FastAPI app with its own proxy and discovery state.
@@ -151,9 +152,12 @@ Migration implication:
 - The Go service should support isolated test instances and avoid hidden global routing state.
 
 ## Known Drift And Quirks
-- `config.example.yaml` uses `auth_preifx`, which is a typo and not a runtime key.
+- `config.example.yaml` previously used `auth_preifx`, which was a typo and not a runtime key. The example has been normalized to `auth_prefix`.
 - Helm ConfigMap content and Python runtime auth loading are not fully aligned.
 - `genkey.py` docstring still describes an older config-file-based flow, while the current CLI is Kubernetes-based.
+
+## Go Layout Link
+The target side-by-side Go project shape is documented in `docs/migration/go-project-layout.md`.
 
 ## Open Questions For Checkpoint 1
 - Should `auth_key_from_env` become a real runtime key, or remain tooling/chart-only?

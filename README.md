@@ -9,6 +9,19 @@
 
 ---
 
+## Migration status
+
+BORG is being migrated from Python to Go with a side-by-side strategy.
+
+- The Python service in `src/borg/` remains the reference runtime and deployment fallback.
+- Milestone 1 froze the Python contract in `docs/migration/`.
+- Milestone 2 has a first Go core proxy implementation without changing production defaults.
+- The planned Go layout is documented in `docs/migration/go-project-layout.md`.
+
+The Go binary is built as `bin/borg-go` during migration so it can run beside the Python `borg` CLI without ambiguity.
+
+---
+
 ## ✨ Features
 
 |                           |                                                                                    |
@@ -123,9 +136,26 @@ uv run pytest -q
 uv run mypy src
 uv run ruff check .
 uv run ruff format --check .
+go test ./...
+go build -o bin/borg-go ./cmd/borg
 ```
 
 Unit tests live under `tests/`.
+Go package tests live beside the Go packages under `internal/`.
+
+---
+
+## Migration docs
+
+| Document | Purpose |
+| -------- | ------- |
+| `ROADMAP.md` | High-level migration milestones |
+| `MILESTONE.md` | Active milestone tasks and validation |
+| `SESSION_RECOVERY.md` | Durable handoff state if chat history is lost |
+| `docs/migration/python-runtime-contract.md` | Python CLI, config, env, and auth contract |
+| `docs/migration/python-http-contract.md` | Python HTTP/proxy behavior contract |
+| `docs/migration/python-ops-contract.md` | Python discovery, Helm, and runtime ops contract |
+| `docs/migration/go-project-layout.md` | Target side-by-side Go project layout |
 
 ---
 

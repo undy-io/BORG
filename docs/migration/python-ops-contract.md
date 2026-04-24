@@ -197,6 +197,7 @@ Operational implication:
 - Python discovery currently skips pods with no annotations because endpoint/model extraction is annotation-driven. That aligns with the intended export policy and should stay annotation-driven in Go.
 - Helm writes `auth_key_from_env` into config, but runtime ignores it. This is drift, not contract.
 - Endpoint health-check eviction is not implemented in Python today and should not be inferred from current code behavior.
+- `config.example.yaml` previously used `auth_preifx`; the example has been normalized to `auth_prefix`.
 
 ## Checkpoint 3 Outcome
 For Milestone 1, the Go rewrite should treat the following as the intended ops contract:
@@ -206,3 +207,6 @@ For Milestone 1, the Go rewrite should treat the following as the intended ops c
 - transient discovery failures preserve the last successful discovered set
 - deployment wiring continues to use `PORT`, `PROXY_CONFIG`, `AUTH_KEY`, mounted config, and per-instance `apikeyEnv`
 - RBAC continues to allow pod discovery across configured namespaces
+
+## Go Layout Link
+The planned Go package boundaries for app wiring, config, proxying, and Kubernetes discovery are documented in `docs/migration/go-project-layout.md`.

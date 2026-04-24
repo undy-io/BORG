@@ -215,3 +215,6 @@ Coverage:
 ## Known Drift And Open Questions
 - Query-param forwarding is implemented in code but not pinned by a characterization test yet.
 - Exact response-header passthrough behavior is implemented in code but not fully pinned by tests yet.
+
+## Go Layout Link
+The HTTP route and proxy responsibilities for the Go implementation are mapped in `docs/migration/go-project-layout.md`.

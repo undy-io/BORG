@@ -1,178 +1,111 @@
-# Milestone 1: Freeze The Python Contract
+# Milestone 2: Go Core Proxy First Pass
 
 ## Status Snapshot
-- Date recovered: 2026-04-21
-- Devcontainer state verified after rebuild:
-  - `go version` -> `go1.26.2 linux/amd64`
-  - `gopls` -> `/go/bin/gopls`
-  - `goimports` -> `/usr/local/bin/goimports`
-  - `dlv` -> `/go/bin/dlv`
-- Python baseline verified:
-  - `uv run pytest -q`
-  - `35 passed in 13.71s`
+- Previous milestone: Milestone 1, "Freeze The Python Contract", complete.
 - Current reference implementation remains Python.
-- There was no existing repo-root `MILESTONE.md` before this file.
+- First Go core proxy implementation has been added beside Python.
+- Verified:
+  - `go test ./...`
+  - `go test -bench Streaming ./internal/proxy`
+  - `go build -o bin/borg-go ./cmd/borg`
+  - `uv run pytest -q`
 
 ## Objective
-Capture the current Python behavior precisely enough that we can build the first Go version for parity instead of guessing from code, docs, or Helm templates independently.
+Introduce a useful Go implementation beside the Python runtime without changing the production deployment path.
 
-Execution approach:
-- Complete Milestone 1 in a single focused pass.
-- Use three checkpoints to keep coverage explicit and avoid missing contract details.
+The Go service now covers static config loading, auth-compatible POST routing, model registry behavior, `/v1/models`, non-streaming forwarding, and streaming forwarding. Python remains the parity oracle and rollback path.
 
 ## Scope
 In scope:
-- HTTP contract
-- Auth and token compatibility
-- Config, env, and CLI contract
-- Discovery behavior
-- Deployment and Helm-facing runtime inputs
-- Known quirks, drift, and ambiguities that must be preserved or explicitly deferred
+- Go module setup
+- Go package layout
+- Python-compatible CLI flags
+- Static config loading
+- Auth key/token validation
+- Static backend registration
+- `/`, `/v1/models`, and POST `/v1/*` routing
+- Non-streaming and streaming request forwarding
+- Local Go tests, benchmark, and build command
+- Keeping Python tests green
 
 Out of scope:
-- Writing the Go service
-- Changing Python behavior unless required to make the baseline observable
-- Removing Python runtime, tests, container path, or Helm path
+- Replacing the Python runtime
+- Switching Helm or Docker defaults to Go
+- Kubernetes discovery implementation
+- Token generation utility replacement
+- CI/release cutover
+- Removing or moving Python files
 
-## Reference Inputs
-- `src/borg/main.py`
-- `src/borg/proxy.py`
-- `src/borg/k8s_discovery.py`
-- `genkey.py`
-- `tests/test_proxy_router.py`
-- `tests/test_proxy_service_instances.py`
-- `tests/test_discovery.py`
-- `tests/test_genkey.py`
-- `charts/borg/values.yaml`
-- `charts/borg/templates/config.yaml`
-- `charts/borg/templates/deployment.yaml`
-- `charts/borg/templates/secret.yaml`
+## Implemented Layout
+```text
+cmd/borg/
+internal/app/
+internal/auth/
+internal/config/
+internal/httpapi/
+internal/openai/
+internal/proxy/
+go.mod
+go.sum
+```
 
-## Recovered Baseline
-
-### Runtime shape
-- The service exposes:
-  - `GET /`
-  - `GET /v1/models`
-  - `POST /v1/{remainder:path}`
-- The runtime is built through `create_app(config_path)` and keeps app-local proxy/discovery state.
-- `PROXY_CONFIG` defaults to `config.yaml`.
-- `PORT` defaults to `8000`.
-
-### Proxy behavior
-- The request body must be valid JSON and include `model`.
-- Unknown models return `404`.
-- Streaming is selected when either:
-  - request JSON contains `"stream": true`
-  - `Accept` contains `text/event-stream`
-- Requests are forwarded to the next endpoint for the requested model in round-robin order.
-- The upstream `Authorization` header is always replaced with the backend API key.
-- Query params and request body are forwarded upstream.
-- Hop-by-hop headers are stripped on proxying.
-- `GET /v1/models` returns the sorted union of non-empty model buckets.
-
-### Auth behavior
-- If no auth key is configured, requests are treated as anonymous.
-- If auth is enabled, the proxy expects `Authorization: Bearer <token>`.
-- Tokens are AES-256-GCM over `auth_prefix + username`.
-- Token wire format is base64url of `nonce || ciphertext+tag`.
-- Nonce length is 12 bytes.
-- `AUTH_KEY` overrides `BORG_AUTH_KEY`, which overrides config `auth_key`.
-
-### Discovery behavior
-- Background discovery runs only when `update_interval > 0` and discovery services are configured.
-- Kubernetes config load order is:
-  - in-cluster config
-  - kubeconfig fallback
-- Only `Running` pods are considered.
-- Endpoint construction defaults:
-  - protocol: `http`
-  - port: `8000`
-  - base path: empty string
-- Models come from the configured annotation key, or from upstream `/v1/models` enumeration when automodel is used.
-- Discovery updates add and remove endpoints from proxy model buckets.
-
-### Deployment/runtime inputs
-- Helm deploys the app with:
-  - `PORT`
-  - `PROXY_CONFIG=/app/config.yaml`
-  - `AUTH_KEY` from a Secret
-  - per-instance API key env vars from a separate Secret when `apikeyEnv` is set
-- Readiness and liveness probes hit `/`.
-- The ConfigMap includes `auth_prefix`, `update_interval`, `instances`, and `k8s_discover`.
+During migration, build the service as `bin/borg-go` to avoid confusion with the Python `borg` CLI.
 
 ## Checkpoints
 
-### Checkpoint 1: Runtime Contract
-Deliverable:
-- A short contract document describing CLI flags, env vars, config shape, precedence rules, and token/key compatibility requirements.
-- Working doc: `docs/migration/python-runtime-contract.md`
-
+### Checkpoint 1: Module And Tooling
 Tasks:
-- [x] Capture CLI flags and defaults from `src/borg/main.py`.
-- [x] Capture env/config precedence for `PROXY_CONFIG`, `PORT`, `AUTH_KEY`, `BORG_AUTH_KEY`, `API_KEY`, and per-instance `apikeyEnv`.
-- [x] Record the token payload format, nonce size, encryption mode, and encoding.
-- [x] Confirm secret formats accepted by `genkey.py`.
-- [x] Confirm whether any currently documented config keys are stale, unused, or tooling-only.
+- [x] Add `go.mod` and `go.sum`.
+- [x] Add the initial Go package layout.
+- [x] Add local commands:
+  - `go test ./...`
+  - `go build -o bin/borg-go ./cmd/borg`
+- [x] Add `bin/` to `.gitignore`.
 
 Validation:
-- [x] Every rule is traceable to code or tests.
-- [ ] Go can later verify Python-issued tokens and Python can verify Go-issued tokens.
+- [x] `go test ./...` passes.
+- [x] `go build -o bin/borg-go ./cmd/borg` succeeds.
+- [x] `uv run pytest -q` still passes.
 
-### Checkpoint 2: HTTP Contract
-Deliverable:
-- A parity checklist for all externally visible HTTP behavior.
-- Working doc: `docs/migration/python-http-contract.md`
-
+### Checkpoint 2: Config And CLI
 Tasks:
-- [x] Document exact route surface and supported methods.
-- [x] Document request validation rules, including missing/invalid `model`.
-- [x] Document streaming selection rules.
-- [x] Document response passthrough behavior for standard and streaming calls.
-- [x] Document `/v1/models` response shape and ordering behavior.
-- [x] Document auth error behavior, upstream API-key rewriting, and unknown-model error expectations.
+- [x] Implement `--config` and `-c`, defaulting to `PROXY_CONFIG`, then `config.yaml`.
+- [x] Implement `--host`, defaulting to `0.0.0.0`.
+- [x] Implement `--port`, defaulting to `PORT`, then `8000`.
+- [x] Accept `--reload` as a no-op compatibility flag.
+- [x] Parse YAML and JSON config files.
+- [x] Preserve the top-level `borg` config shape.
+- [x] Implement auth and backend API key precedence.
 
 Validation:
-- [x] Each behavior is backed by an existing test or called out as needing a characterization test.
+- [x] Go config tests cover path, port, YAML/JSON parsing, auth key precedence, and backend API key precedence.
 
-### Checkpoint 3: Ops Contract
-Deliverable:
-- A migration note covering discovery behavior, refresh semantics, and Helm/deployment-facing runtime inputs.
-- Working doc: `docs/migration/python-ops-contract.md`
-
+### Checkpoint 3: HTTP And Proxy Parity
 Tasks:
-- [x] Document selector schema used by `k8s_discover`.
-- [x] Document pod filtering and endpoint synthesis defaults.
-- [x] Document automodel behavior and failure handling.
-- [x] Document add/remove reconciliation semantics during refresh.
-- [x] Capture the current Secret, ConfigMap, and env wiring used by the chart.
-- [x] Capture probe paths and port assumptions.
-- [x] Identify chart fields that are part of the external contract vs chart internals.
-- [x] Record chart/runtime mismatches and quirks that should not be "fixed" accidentally during the port.
-
-Current candidate quirks:
-- [x] `config.example.yaml` contains `auth_preifx`, which appears to be a typo and not the runtime key. Normalize before or during the Go port; do not preserve it.
-- [x] Normalize auth prefix default to `PROXY:` before porting; do not preserve the earlier `Proxy:` bug in Go.
-- [x] Helm writes `auth_key_from_env` into config for supporting tooling, but runtime auth is supplied via `AUTH_KEY`. Treat this as drift, not runtime contract.
-- [x] Discovery only evicts on authoritative absence, not on failed discovery passes. Python reference is normalized to match this contract.
+- [x] Implement `GET /`.
+- [x] Implement `GET /v1/models`.
+- [x] Implement POST `/v1/*`.
+- [x] Implement auth enforcement only for POST proxy routes.
+- [x] Implement invalid JSON, non-object JSON, missing model, and unknown model errors.
+- [x] Implement model registry listing and round-robin endpoint selection.
+- [x] Implement non-streaming forwarding with upstream auth rewrite.
+- [x] Implement streaming forwarding with chunk flushing and downstream cancellation propagation.
 
 Validation:
-- [x] Existing discovery tests cover the happy path and fallback paths.
-- [x] Gaps are listed explicitly before any Go implementation starts.
-- [x] Each quirk is marked as one of:
-  - preserve in Go v1
-  - normalize before porting
-  - normalize after parity is proven
+- [x] Go HTTP tests cover root, models, body validation, auth errors, valid auth, non-stream forwarding, streaming by body flag, streaming by Accept header, and downstream cancellation.
+- [x] Go proxy benchmark records streaming throughput and allocations.
 
-## Exit Criteria
-- We have one written source of truth for the Python contract.
-- The parity target for the first Go version is explicit.
-- Known ambiguities are listed, not hidden in code.
-- We agree on which quirks Go v1 must preserve.
-- Milestone 2 can begin without re-reading the whole Python service to rediscover behavior.
+### Checkpoint 4: Documentation And Handoff
+Tasks:
+- [x] Add the Go project layout overview.
+- [x] Update `README.md` with migration status and Go commands.
+- [x] Update `ROADMAP.md` with current status.
+- [x] Update `SESSION_RECOVERY.md` for the first Go core proxy implementation.
 
-## Next Concrete Step
-Write the contract document(s) in checkpoint order:
-1. start Milestone 2 with the Go module and service skeleton beside the Python reference
-2. keep Python as the parity oracle while the first Go request path comes online
-3. port discovery and deployment behavior only after the Go request path is stable
+Validation:
+- [x] A future session can resume from `SESSION_RECOVERY.md` and know the next code task.
+
+## Remaining Work
+- Exercise `bin/borg-go` manually against `dummy-openai`.
+- Add side-by-side Python/Go parity integration tests if useful before discovery work.
+- Decide whether Kubernetes discovery is next or whether to harden proxy performance and observability first.

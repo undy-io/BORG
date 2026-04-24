@@ -37,5 +37,6 @@ RUN apt-get update \
         redis-tools \
         sqlite3 \
         awscli \
+        bubblewrap \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
