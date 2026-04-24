@@ -2,27 +2,28 @@
 
 Use this file to resume the Go migration if chat history is lost.
 
-## Last Recovered Branch State
+## Current Branch State
 - Branch: `go-migration`
-- Last recovered commit: `7d98f84 M1`
-- At recovery time, the branch was one migration commit ahead of `master`
-- Go implementation status: first core proxy implementation added beside Python
-- Latest Go review hardening status: compression/header behavior and backend API key precedence fixed
+- Last committed baseline: `91d17a2 Initial http parity smoke test`
+- Current uncommitted migration work: Go Kubernetes discovery, app discovery lifecycle wiring, Kubernetes dependency updates, documentation refresh, and IPv6-safe discovered endpoint URLs
+- Go implementation status: static proxy path and Kubernetes discovery are implemented beside Python
+- Latest Go review hardening status: compression/header behavior, backend API key precedence, Kubernetes discovery lifecycle, and discovered endpoint URL construction
 - Local smoke/parity harness status: implemented in `tests/smoke/test_local_parity.py`
+- Go Kubernetes discovery status: implemented with `client-go` behind the existing static proxy path
 - Python implementation status: still the reference runtime and parity oracle
 - Latest verified baseline:
   - `uv run pytest -q`
-  - `56 passed in 38.99s`
+  - `56 passed`
   - `uv run pytest -q tests/smoke`
-  - `14 passed in 22.76s`
+  - `14 passed`
   - `go test ./...`
   - `go vet ./...`
   - `go test -bench Streaming ./internal/proxy`
   - `go build -o bin/borg-go ./cmd/borg`
 
-Local uncommitted state observed during recovery:
-- `.devcontainer/Dockerfile` has a local edit adding `bubblewrap` to apt packages.
-- `.codex` exists as an empty untracked file.
+Local uncommitted state:
+- Go discovery implementation, IPv6 endpoint fix, dependency updates, tests, and docs are modified but not committed.
+- `.codex` exists as an untracked local file and is unrelated to the migration changes.
 
 ## Project Goal
 Migrate BORG from Python to Go using a side-by-side approach. Python remains the reference implementation until the Go service reaches HTTP, auth, discovery, config, Helm, and operational parity.
@@ -40,7 +41,7 @@ Migrate BORG from Python to Go using a side-by-side approach. Python remains the
 ## Milestone Status
 Milestone 1, "Freeze The Python Contract", is complete.
 
-Milestone 2, "Go Core Proxy First Pass", is now the active milestone in `MILESTONE.md`.
+Milestone 2, "Go Core Proxy And Kubernetes Discovery", is now the active milestone in `MILESTONE.md`.
 
 Milestone 1 produced the frozen Python contract docs:
 - `docs/migration/python-runtime-contract.md`
@@ -57,6 +58,8 @@ Milestone 2 code produced:
 - `internal/app`
 - `internal/auth`
 - `internal/config`
+- `internal/discovery`
+- `internal/discovery/k8s`
 - `internal/httpapi`
 - `internal/openai`
 - `internal/proxy`
@@ -67,6 +70,23 @@ Milestone 2 review hardening completed:
 - Go streaming forwarding sends upstream `Accept-Encoding: identity` to protect SSE latency.
 - Go request and response header filtering strips static hop-by-hop headers and headers named by `Connection`.
 - Go backend API key precedence is `apikeyEnv` value, inline `apikey`, `API_KEY`, then `EMPTY`.
+
+Milestone 2 Kubernetes discovery completed:
+- `internal/discovery` defines shared endpoint, discoverer, registry, and reconciler types.
+- The reconciler mutates the proxy only after a successful discovery pass.
+- Failed discovery passes return an error to the caller and preserve the previous successful discovered snapshot.
+- `internal/discovery/k8s` uses official Kubernetes Go client packages.
+- Kubernetes config loading tries in-cluster config first, then kubeconfig defaults honoring `KUBECONFIG` and `~/.kube/config`.
+- Pod discovery lists configured namespaces and selectors.
+- Eligible pods must be `Running`, have annotations, have a pod IP, and resolve at least one model.
+- Endpoint URL construction uses `borg/protocol` default `http`, `borg/apiport` default `8000`, and `borg/apibase` default empty.
+- Endpoint URL construction uses `net.JoinHostPort`, so IPv4 and IPv6 pod IPs are encoded correctly.
+- Model resolution uses configured `modelkey` comma lists first, then automodel `GET <endpoint>/v1/models` with `Authorization: Bearer EMPTY`.
+- Discovered endpoints use API key `EMPTY`.
+- `internal/app` starts discovery only when `update_interval > 0` and `k8s_discover` is non-empty.
+- Discovery initialization failures are logged and static config continues to serve.
+- Discovery runs one immediate reconciliation, then repeats every `update_interval` seconds.
+- `App.Close()` cancels and waits for background discovery; `cmd/borg` defers it.
 
 Milestone 1 also added or strengthened characterization coverage around:
 - invalid or non-object JSON request bodies
@@ -154,23 +174,24 @@ Implemented packages:
 - `internal/app`
 - `internal/auth`
 - `internal/config`
+- `internal/discovery`
+- `internal/discovery/k8s`
 - `internal/httpapi`
 - `internal/openai`
 - `internal/proxy`
 
 Later packages:
 - `cmd/borg-genkey`
-- `internal/discovery`
-- `internal/discovery/k8s`
 
 During migration, build the service as `bin/borg-go` so it can run beside the Python `borg` CLI.
 
 ## Next Step
-Decide the next implementation lane now that the Kubernetes-free local smoke/parity harness is green.
+Decide whether the next lane is a local Kubernetes smoke harness, `borg-genkey`, or Go deployment wiring now that Go Kubernetes discovery validation is green.
 
 Recommended next tasks:
-- Review whether Kubernetes discovery or proxy observability/performance hardening should be next.
 - Keep `go build -o bin/borg-go ./cmd/borg && uv run pytest -q tests/smoke` as the local static-path validation loop.
+- Add a KinD or fake-cluster smoke path before switching Helm/Docker defaults to Go.
+- Port or replace `borg-genkey` before final runtime cutover.
 - Do not change Helm defaults to Go yet.
 
 ## Useful Commands

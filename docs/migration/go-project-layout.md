@@ -8,6 +8,7 @@ The goal is to make the Go service easy to build, test, and compare without chan
 ## Current State
 - Python remains the reference runtime.
 - A first Go core proxy implementation exists beside the Python runtime.
+- Go Kubernetes discovery is implemented behind the existing static proxy path.
 - The devcontainer already includes Go tooling.
 - The Python contract is frozen in:
   - `docs/migration/python-runtime-contract.md`
@@ -45,6 +46,7 @@ The first Go implementation should grow toward this shape:
 │   │   └── config_test.go
 │   ├── discovery/
 │   │   ├── discovery.go
+│   │   ├── discovery_test.go
 │   │   └── k8s/
 │   │       ├── k8s.go
 │   │       └── k8s_test.go
@@ -102,6 +104,8 @@ Responsibilities:
 - own background discovery lifecycle
 - support isolated app construction for tests
 - avoid hidden global routing state
+- start discovery only when `update_interval > 0` and `k8s_discover` is non-empty
+- expose `Close()` so command and tests can stop background discovery cleanly
 
 Python reference:
 - `src/borg/main.py:create_app`
@@ -171,6 +175,8 @@ Responsibilities:
 - define discovered endpoint data structures
 - define a refresh/update interface
 - keep Kubernetes-specific code behind a narrow boundary
+- reconcile only successful discovery snapshots into the proxy registry
+- preserve the previous successful discovered snapshot when discovery fails
 
 Python reference:
 - `src/borg/k8s_discovery.py`
@@ -185,8 +191,10 @@ Responsibilities:
 - apply Running-pod and annotation/model eligibility rules
 - synthesize endpoints from pod IP and annotations
 - preserve authoritative refresh semantics
+- resolve models from the configured annotation key before automodel fallback
+- query automodel via `GET <endpoint>/v1/models` with `Authorization: Bearer EMPTY`
 
-This package can be stubbed or omitted in the earliest Milestone 2 skeleton if doing so keeps the first Go service small and verifiable.
+The first Go discovery pass uses polling only. Kubernetes watches/informers, health-check eviction, per-discovery upstream API keys, and Helm/Docker cutover remain later work.
 
 ### `internal/openai`
 Small OpenAI-compatible response/request structs.
@@ -210,6 +218,8 @@ Expected early coverage:
 - root route response
 - `/v1/models` response shape
 - model registration and round-robin selection
+- Kubernetes discovery eligibility and reconciliation behavior
+- app discovery lifecycle gates and shutdown
 
 Parity tests can start small and grow:
 - keep Python tests green with `uv run pytest -q`
@@ -219,7 +229,7 @@ Parity tests can start small and grow:
 The Kubernetes-free local smoke/parity harness is implemented under `tests/smoke` and documented in `docs/migration/local-smoke-test-harness.md`.
 
 ## Build And Run Commands
-These commands are valid after the first Go core proxy implementation:
+These commands are valid for the side-by-side Go implementation:
 
 ```bash
 go test ./...
@@ -247,14 +257,16 @@ Do not move or remove these during Milestone 2:
 
 Those files remain the Python reference and deployment fallback until the cutover milestone.
 
-## Milestone 2 Minimum
-The first Go skeleton is complete when:
+## Milestone 2 Baseline
+The side-by-side Go baseline is useful when:
 
 - `go.mod` exists
 - `cmd/borg` builds into `bin/borg-go`
 - `go test ./...` passes
 - the Go service can serve `GET /`
 - config path and port precedence match the Python contract
+- core proxy behavior is covered by Go package tests and local smoke tests
+- Kubernetes discovery is covered by Go package tests
 - `README.md`, `ROADMAP.md`, `MILESTONE.md`, and `SESSION_RECOVERY.md` describe the side-by-side workflow
-- `docs/migration/local-smoke-test-harness.md` describes how to validate the static proxy path locally before Kubernetes discovery exists in Go
+- `docs/migration/local-smoke-test-harness.md` describes how to validate the static proxy path locally without Kubernetes
 - Python tests still pass

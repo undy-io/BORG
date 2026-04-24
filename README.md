@@ -15,7 +15,7 @@ BORG is being migrated from Python to Go with a side-by-side strategy.
 
 - The Python service in `src/borg/` remains the reference runtime and deployment fallback.
 - Milestone 1 froze the Python contract in `docs/migration/`.
-- Milestone 2 has a first Go core proxy implementation without changing production defaults.
+- Milestone 2 has a first Go core proxy implementation and Go Kubernetes discovery without changing production defaults.
 - The planned Go layout is documented in `docs/migration/go-project-layout.md`.
 - The Kubernetes-free local smoke/parity harness is implemented in `tests/smoke` and documented in `docs/migration/local-smoke-test-harness.md`.
 

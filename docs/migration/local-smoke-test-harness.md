@@ -3,7 +3,7 @@
 ## Purpose
 Provide a Kubernetes-free validation loop for the Go migration.
 
-The harness runs the Python reference service and the Go service side by side against local OpenAI-compatible dummy upstreams. This gives us confidence in the static proxy path before Kubernetes discovery exists in Go.
+The harness runs the Python reference service and the Go service side by side against local OpenAI-compatible dummy upstreams. This keeps the static proxy path easy to validate while Kubernetes discovery and deployment wiring evolve separately.
 
 Implemented test suite:
 - `tests/smoke/test_local_parity.py`

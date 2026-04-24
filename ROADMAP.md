@@ -11,7 +11,8 @@ The Python implementation remains the reference service until the Go implementat
 - The first Go core proxy implementation has been added beside the Python reference.
 - Go proxy review hardening is complete for compression/header handling and backend API key precedence.
 - Kubernetes-free side-by-side local smoke validation is implemented under `tests/smoke`.
-- The remaining Milestone 2 decision is whether to move next into Kubernetes discovery or proxy observability/performance hardening.
+- Go Kubernetes discovery is implemented behind the existing static proxy path.
+- Helm, Docker, CI defaults, and the Python runtime are still unchanged.
 
 ## Working Model
 - This roadmap stays high level and milestone-oriented.
@@ -76,14 +77,15 @@ Outcomes:
 Exit criteria:
 - The Go service can serve the main proxy use cases with parity to the Python implementation.
 - Core tests for routing, auth, and streaming pass for the Go implementation.
-- The Go service is useful in development even if Kubernetes discovery is not finished yet.
+- The Go service is useful in development while deployment wiring is still Python-first.
 
 ## Milestone 4: Port Discovery And Operational Tooling
 Bring over the cluster-aware and operational parts that make BORG deployable in real environments.
 
+Note: Kubernetes polling discovery was pulled forward into Milestone 2 so it could be tested before deployment cutover. Milestone 4 should focus on the remaining operational tooling and deployment path.
+
 Outcomes:
-- Implement Kubernetes discovery and periodic refresh behavior in Go.
-- Preserve annotation and selector-driven endpoint discovery behavior.
+- Validate Kubernetes discovery in a local or cluster-backed deployment loop.
 - Port or replace the token generation utility so issued tokens remain compatible.
 - Add container build support and any required CI jobs for the Go implementation.
 - Keep Helm and deployment inputs aligned while the repo supports both runtimes.

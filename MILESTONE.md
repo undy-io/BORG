@@ -1,10 +1,12 @@
-# Milestone 2: Go Core Proxy First Pass
+# Milestone 2: Go Core Proxy And Kubernetes Discovery
 
 ## Status Snapshot
 - Previous milestone: Milestone 1, "Freeze The Python Contract", complete.
 - Current reference implementation remains Python.
 - First Go core proxy implementation has been added beside Python.
 - Review hardening completed for compression/header behavior and backend API key precedence.
+- Go Kubernetes discovery has been added behind the existing static proxy path.
+- Helm, Docker, CI defaults, and the Python runtime are unchanged.
 - Verified:
   - `go test ./...`
   - `go vet ./...`
@@ -16,7 +18,7 @@
 ## Objective
 Introduce a useful Go implementation beside the Python runtime without changing the production deployment path.
 
-The Go service now covers static config loading, auth-compatible POST routing, model registry behavior, `/v1/models`, non-streaming forwarding, and streaming forwarding. Python remains the parity oracle and rollback path.
+The Go service now covers static config loading, auth-compatible POST routing, model registry behavior, `/v1/models`, non-streaming forwarding, streaming forwarding, and Kubernetes pod discovery. Python remains the parity oracle and rollback path.
 
 Local side-by-side smoke validation now runs without Kubernetes.
 
@@ -30,13 +32,18 @@ In scope:
 - Static backend registration
 - `/`, `/v1/models`, and POST `/v1/*` routing
 - Non-streaming and streaming request forwarding
+- Kubernetes discovery through configured `k8s_discover` selectors
+- Authoritative successful discovery reconciliation
+- Failed-pass discovery snapshot preservation
 - Local Go tests, benchmark, and build command
 - Keeping Python tests green
 
 Out of scope:
 - Replacing the Python runtime
 - Switching Helm or Docker defaults to Go
-- Kubernetes discovery implementation
+- Kubernetes watch/informer implementation
+- Per-discovery upstream API keys
+- Health-check eviction
 - Token generation utility replacement
 - CI/release cutover
 - Removing or moving Python files
@@ -47,6 +54,8 @@ cmd/borg/
 internal/app/
 internal/auth/
 internal/config/
+internal/discovery/
+internal/discovery/k8s/
 internal/httpapi/
 internal/openai/
 internal/proxy/
@@ -120,5 +129,29 @@ Validation:
 - [x] A future session can resume from `SESSION_RECOVERY.md` and know the next code task.
 - [x] `uv run pytest -q tests/smoke` passes with real Python and Go proxy subprocesses.
 
+### Checkpoint 5: Kubernetes Discovery
+Tasks:
+- [x] Add shared discovery endpoint, discoverer, registry, and reconciler types.
+- [x] Preserve the last successful discovered snapshot across failed refresh passes.
+- [x] Add Kubernetes discovery using `client-go`.
+- [x] Load Kubernetes config from in-cluster config, then kubeconfig defaults.
+- [x] List pods by configured namespace and selector.
+- [x] Skip non-running pods, pods without annotations, pods without pod IPs, and pods with no resolved models.
+- [x] Build endpoint URLs from pod IP plus `borg/protocol`, `borg/apiport`, and `borg/apibase` annotations.
+- [x] Resolve models from configured `modelkey` annotation before automodel lookup.
+- [x] Query automodel via `GET <endpoint>/v1/models` with `Authorization: Bearer EMPTY`.
+- [x] Start discovery only when `update_interval > 0` and `k8s_discover` is non-empty.
+- [x] Log discovery initialization failures and continue serving static config.
+- [x] Run one update immediately, then poll every `update_interval` seconds.
+- [x] Add `App.Close()` and close background discovery from `cmd/borg`.
+
+Validation:
+- [x] Shared reconciler tests cover initial add, authoritative removal, model-specific add/remove, and failed-pass preservation.
+- [x] Kubernetes discovery tests cover pod eligibility, defaults, annotation overrides, model parsing, automodel success/failure, and list errors.
+- [x] App wiring tests cover discovery gating, init failure fallback, discovered model registration, and clean shutdown.
+
 ## Remaining Work
-- Decide whether Kubernetes discovery is next or whether to harden proxy performance and observability first.
+- Add a Kubernetes-capable local or KinD validation loop for Go discovery when deployment wiring is ready.
+- Port or replace `borg-genkey`.
+- Decide when to add Go container/Helm/CI wiring.
+- Keep static-path smoke validation green while discovery evolves.

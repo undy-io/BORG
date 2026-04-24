@@ -47,6 +47,7 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	defer borgApp.Close()
 
 	addr := net.JoinHostPort(host, strconv.Itoa(port))
 	server := &http.Server{
