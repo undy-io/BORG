@@ -87,13 +87,21 @@ go build -o bin/borg-go ./cmd/borg
 ```
 
 ### `cmd/borg-genkey`
-Go replacement for `genkey.py`, added later after the service skeleton is stable.
+Go replacement for `genkey.py`.
 
 Responsibilities:
 - preserve AES-256-GCM token compatibility
 - preserve the `auth_prefix + username` plaintext contract
 - preserve support for URL-safe printable auth key Secret data and migrated legacy raw key Secret data
-- keep the Python utility available until the Go utility is validated
+- load local kubeconfig using Kubernetes default loading rules
+- read ConfigMap defaults and auth Secret data using `client-go`
+- keep the Python utility available until final cutover
+
+During migration, build it as `bin/borg-genkey`:
+
+```bash
+go build -o bin/borg-genkey ./cmd/borg-genkey
+```
 
 ## Internal Packages
 ### `internal/app`
@@ -131,7 +139,8 @@ Responsibilities:
 - validate 32-byte AES-256 keys
 - decrypt bearer tokens
 - enforce auth prefix checks
-- generate tokens when `cmd/borg-genkey` lands
+- generate tokens for `cmd/borg-genkey`
+- decode auth Secret values from either printable URL-safe key text or legacy raw key bytes
 
 Python reference:
 - `src/borg/proxy.py`
@@ -235,6 +244,7 @@ These commands are valid for the side-by-side Go implementation:
 ```bash
 go test ./...
 go build -o bin/borg-go ./cmd/borg
+go build -o bin/borg-genkey ./cmd/borg-genkey
 ./bin/borg-go --config config.yaml --port 8001
 ```
 
@@ -263,6 +273,7 @@ The side-by-side Go baseline is useful when:
 
 - `go.mod` exists
 - `cmd/borg` builds into `bin/borg-go`
+- `cmd/borg-genkey` builds into `bin/borg-genkey`
 - `go test ./...` passes
 - the Go service can serve `GET /`
 - config path and port precedence match the Python contract

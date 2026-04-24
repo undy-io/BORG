@@ -13,6 +13,7 @@ The Python implementation remains the reference service until the Go implementat
 - Kubernetes-free side-by-side local smoke validation is implemented under `tests/smoke`.
 - Go Kubernetes discovery is implemented behind the existing static proxy path.
 - Fake Kubernetes API smoke validation for Go discovery is implemented under `tests/k8s_smoke`.
+- Go `borg-genkey` is implemented beside Python `genkey.py`.
 - Helm, Docker, CI defaults, and the Python runtime are still unchanged.
 
 ## Working Model
@@ -89,7 +90,7 @@ Note: Kubernetes polling discovery was pulled forward into Milestone 2 so it cou
 Outcomes:
 - Validate Kubernetes discovery in a local fake API smoke loop before deployment wiring.
 - Validate Kubernetes discovery in a cluster-backed deployment loop after deployment wiring exists.
-- Port or replace the token generation utility so issued tokens remain compatible.
+- Keep the Go token generation utility compatible with Python-issued and Go-issued tokens.
 - Add container build support and any required CI jobs for the Go implementation.
 - Keep Helm and deployment inputs aligned while the repo supports both runtimes.
 

@@ -7,12 +7,14 @@
 - Review hardening completed for compression/header behavior and backend API key precedence.
 - Go Kubernetes discovery has been added behind the existing static proxy path.
 - Fake Kubernetes API smoke validation has been added for the Go discovery path.
+- Go `borg-genkey` has been added beside Python `genkey.py`.
 - Helm, Docker, CI defaults, and the Python runtime are unchanged.
 - Verified:
   - `go test ./...`
   - `go vet ./...`
   - `go test -bench Streaming ./internal/proxy`
   - `go build -o bin/borg-go ./cmd/borg`
+  - `go build -o bin/borg-genkey ./cmd/borg-genkey`
   - `uv run pytest -q tests/smoke`
   - `uv run pytest -q tests/k8s_smoke`
   - `uv run pytest -q`
@@ -37,6 +39,7 @@ In scope:
 - Kubernetes discovery through configured `k8s_discover` selectors
 - Authoritative successful discovery reconciliation
 - Failed-pass discovery snapshot preservation
+- Go token generation utility
 - Local Go tests, benchmark, and build command
 - Keeping Python tests green
 
@@ -46,13 +49,13 @@ Out of scope:
 - Kubernetes watch/informer implementation
 - Per-discovery upstream API keys
 - Health-check eviction
-- Token generation utility replacement
 - CI/release cutover
 - Removing or moving Python files
 
 ## Implemented Layout
 ```text
 cmd/borg/
+cmd/borg-genkey/
 internal/app/
 internal/auth/
 internal/config/
@@ -66,6 +69,7 @@ go.sum
 ```
 
 During migration, build the service as `bin/borg-go` to avoid confusion with the Python `borg` CLI.
+Build the Go token utility as `bin/borg-genkey` while Python `genkey.py` remains available.
 
 ## Checkpoints
 
@@ -167,8 +171,22 @@ Validation:
 - [x] `go build -o bin/borg-go ./cmd/borg`
 - [x] `uv run pytest -q tests/k8s_smoke`
 
+### Checkpoint 7: Go Token Utility
+Tasks:
+- [x] Add `cmd/borg-genkey` as a Go replacement for `genkey.py`.
+- [x] Preserve Kubernetes CLI flags: username, namespace, release, key-name, auth-prefix, secret suffix, and configmap suffix.
+- [x] Load local kubeconfig using default client-go loading rules.
+- [x] Read ConfigMap defaults from `<release>-config` `config.yaml`.
+- [x] Read auth key data from `<release>-auth`.
+- [x] Preserve support for migrated printable URL-safe auth key text and legacy raw 32-byte Secret data.
+- [x] Mint AES-256-GCM tokens with plaintext `auth_prefix + username`.
+- [x] Keep Python `genkey.py` in place during migration.
+
+Validation:
+- [x] Go tests cover ConfigMap defaults, CLI overrides, default prefix, first Secret key fallback, missing Secret keys, Secret data formats, and token validation.
+- [x] `go build -o bin/borg-genkey ./cmd/borg-genkey`
+
 ## Remaining Work
 - Add KinD or real-cluster deployment validation when Go Helm/Docker wiring is ready.
-- Port or replace `borg-genkey`.
 - Decide when to add Go container/Helm/CI wiring.
 - Keep static-path smoke validation green while discovery evolves.

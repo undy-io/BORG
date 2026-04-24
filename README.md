@@ -16,6 +16,7 @@ BORG is being migrated from Python to Go with a side-by-side strategy.
 - The Python service in `src/borg/` remains the reference runtime and deployment fallback.
 - Milestone 1 froze the Python contract in `docs/migration/`.
 - Milestone 2 has a first Go core proxy implementation and Go Kubernetes discovery without changing production defaults.
+- A Go `borg-genkey` replacement is available during migration as `bin/borg-genkey`.
 - The planned Go layout is documented in `docs/migration/go-project-layout.md`.
 - The Kubernetes-free local smoke/parity harness is implemented in `tests/smoke` and documented in `docs/migration/local-smoke-test-harness.md`.
 - The fake Kubernetes API smoke harness for Go discovery is implemented in `tests/k8s_smoke` and documented in `docs/migration/go-k8s-smoke-test-harness.md`.
@@ -140,6 +141,7 @@ uv run ruff check .
 uv run ruff format --check .
 go test ./...
 go build -o bin/borg-go ./cmd/borg
+go build -o bin/borg-genkey ./cmd/borg-genkey
 uv run pytest -q tests/smoke
 uv run pytest -q tests/k8s_smoke
 ```

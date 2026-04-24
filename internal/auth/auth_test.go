@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"net/http"
+	"strings"
 	"testing"
 )
 
@@ -105,6 +106,59 @@ func TestAuthKeyMustUseURLSafeBase64(t *testing.T) {
 	}
 	if _, err := New(base64.URLEncoding.EncodeToString(key), ""); err != nil {
 		t.Fatalf("expected URL-safe auth key to be accepted: %v", err)
+	}
+}
+
+func TestDecodeSecretKeySupportsTextAndLegacyRawSecrets(t *testing.T) {
+	rawKey := []byte("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+	textKey := base64.URLEncoding.EncodeToString(rawKey)
+
+	decoded, err := DecodeSecretKey([]byte(textKey))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(decoded) != string(rawKey) {
+		t.Fatalf("expected text key to decode to raw key")
+	}
+
+	decoded, err = DecodeSecretKey(rawKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(decoded) != string(rawKey) {
+		t.Fatalf("expected raw key to be returned")
+	}
+}
+
+func TestMintTokenCanBeValidated(t *testing.T) {
+	key := []byte("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+	token, err := MintToken("alice", key, "PROXY:")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	authenticator, err := New(base64.URLEncoding.EncodeToString(key), "PROXY:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	req, _ := http.NewRequest(http.MethodPost, "/", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	username, err := authenticator.Require(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if username != "alice" {
+		t.Fatalf("expected alice, got %q", username)
+	}
+}
+
+func TestMintTokenRejectsInvalidKeyLength(t *testing.T) {
+	_, err := MintToken("alice", []byte("short"), "PROXY:")
+	if err == nil {
+		t.Fatal("expected invalid key error")
+	}
+	if !strings.Contains(err.Error(), "32-byte") {
+		t.Fatalf("expected key length error, got %v", err)
 	}
 }
 

@@ -142,6 +142,7 @@ Observed from tests:
 Migration implication:
 - Helm normalizes legacy raw-byte secrets and generated auth keys to URL-safe base64 text.
 - The Go runtime intentionally accepts URL-safe base64 auth keys only.
+- The Go `borg-genkey` utility accepts both Secret data formats so it can operate across migrated and legacy chart installs.
 
 ## App Construction Contract
 - `create_app(config_path)` returns an isolated FastAPI app with its own proxy and discovery state.

@@ -5,12 +5,13 @@ Use this file to resume the Go migration if chat history is lost.
 ## Current Branch State
 - Branch: `go-migration`
 - Last committed baseline: `91d17a2 Initial http parity smoke test`
-- Current uncommitted migration work: fake Kubernetes API smoke validation for Go discovery
-- Go implementation status: static proxy path and Kubernetes discovery are implemented beside Python
+- Current uncommitted migration work: Go `borg-genkey` utility and shared auth token helpers
+- Go implementation status: static proxy path, Kubernetes discovery, fake Kubernetes discovery smoke validation, and token generation utility are implemented beside Python
 - Latest Go review hardening status: compression/header behavior, backend API key precedence, Kubernetes discovery lifecycle, and discovered endpoint URL construction
 - Local smoke/parity harness status: implemented in `tests/smoke/test_local_parity.py`
 - Go Kubernetes smoke harness status: implemented in `tests/k8s_smoke/test_go_k8s_discovery.py`
 - Go Kubernetes discovery status: implemented with `client-go` behind the existing static proxy path
+- Go token utility status: implemented in `cmd/borg-genkey`
 - Python implementation status: still the reference runtime and parity oracle
 - Latest verified baseline:
   - `uv run pytest -q`
@@ -23,9 +24,10 @@ Use this file to resume the Go migration if chat history is lost.
   - `go vet ./...`
   - `go test -bench Streaming ./internal/proxy`
   - `go build -o bin/borg-go ./cmd/borg`
+  - `go build -o bin/borg-genkey ./cmd/borg-genkey`
 
 Local uncommitted state:
-- Fake Kubernetes smoke test suite and docs are modified but not committed.
+- Go `borg-genkey`, shared auth token helpers, tests, and docs are modified but not committed.
 - `.codex` exists as an untracked local file and is unrelated to the migration changes.
 
 ## Project Goal
@@ -58,6 +60,7 @@ Milestone 2 documentation produced:
 Milestone 2 code produced:
 - `go.mod` and `go.sum`
 - `cmd/borg`
+- `cmd/borg-genkey`
 - `internal/app`
 - `internal/auth`
 - `internal/config`
@@ -98,6 +101,15 @@ Milestone 2 fake Kubernetes smoke validation completed:
 - The fake API implements pod list responses for configured namespaces and selectors.
 - Local dummy OpenAI-compatible upstreams make discovered endpoints callable from the Go process.
 - Coverage includes annotation discovery, automodel discovery, authoritative removal, failed-list snapshot preservation, selector request shape, and endpoint annotation overrides.
+
+Milestone 2 Go token utility completed:
+- `cmd/borg-genkey` ports the Kubernetes-oriented `genkey.py` workflow.
+- The Go utility accepts username plus `--namespace/-n`, `--release/-r`, `--key-name/-k`, `--auth-prefix`, `--secret-suffix`, and `--configmap-suffix`.
+- The utility loads local kubeconfig through `client-go` default loading rules.
+- ConfigMap defaults come from `<release>-config` `config.yaml` fields `auth_key_from_env` and `auth_prefix`.
+- Auth keys are read from `<release>-auth` Secret data.
+- Secret data supports migrated printable URL-safe auth key text and legacy raw 32-byte AES keys.
+- Tokens use AES-256-GCM with plaintext `auth_prefix + username` and base64url `nonce || ciphertext+tag`.
 
 Milestone 1 also added or strengthened characterization coverage around:
 - invalid or non-object JSON request bodies
@@ -182,6 +194,7 @@ The side-by-side Go layout lives in `docs/migration/go-project-layout.md`.
 Implemented packages:
 - `go.mod`
 - `cmd/borg/main.go`
+- `cmd/borg-genkey/main.go`
 - `internal/app`
 - `internal/auth`
 - `internal/config`
@@ -191,19 +204,17 @@ Implemented packages:
 - `internal/openai`
 - `internal/proxy`
 
-Later packages:
-- `cmd/borg-genkey`
-
 During migration, build the service as `bin/borg-go` so it can run beside the Python `borg` CLI.
+Build the token utility as `bin/borg-genkey` while Python `genkey.py` remains available.
 
 ## Next Step
-Decide whether the next lane is `borg-genkey`, opt-in Go deployment wiring, or KinD validation now that local fake Kubernetes discovery validation is green.
+Decide whether the next lane is opt-in Go deployment wiring or KinD validation now that local fake Kubernetes discovery validation and Go token generation are green.
 
 Recommended next tasks:
 - Keep `go build -o bin/borg-go ./cmd/borg && uv run pytest -q tests/smoke` as the local static-path validation loop.
 - Keep `go build -o bin/borg-go ./cmd/borg && uv run pytest -q tests/k8s_smoke` as the local discovery validation loop.
+- Keep `go build -o bin/borg-genkey ./cmd/borg-genkey && go test ./cmd/borg-genkey ./internal/auth` as the token utility validation loop.
 - Add KinD validation before switching Helm/Docker defaults to Go.
-- Port or replace `borg-genkey` before final runtime cutover.
 - Do not change Helm defaults to Go yet.
 
 ## Useful Commands
@@ -216,6 +227,7 @@ go test ./...
 go vet ./...
 go test -bench Streaming ./internal/proxy
 go build -o bin/borg-go ./cmd/borg
+go build -o bin/borg-genkey ./cmd/borg-genkey
 uv run pytest -q tests/smoke
 uv run pytest -q tests/k8s_smoke
 ```

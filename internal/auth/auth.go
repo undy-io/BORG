@@ -3,8 +3,10 @@ package auth
 import (
 	"crypto/aes"
 	"crypto/cipher"
+	"crypto/rand"
 	"encoding/base64"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 
@@ -39,6 +41,15 @@ func New(keyText string, prefix string) (*Authenticator, error) {
 		return &Authenticator{prefix: prefix}, nil
 	}
 
+	key, err := DecodeKeyText(keyText)
+	if err != nil {
+		return nil, err
+	}
+
+	return &Authenticator{key: key, prefix: prefix}, nil
+}
+
+func DecodeKeyText(keyText string) ([]byte, error) {
 	key, err := decodeURLBase64(keyText)
 	if err != nil {
 		return nil, fmt.Errorf("auth_key must be base64-url encoded: %w", err)
@@ -46,8 +57,18 @@ func New(keyText string, prefix string) (*Authenticator, error) {
 	if len(key) != 32 {
 		return nil, fmt.Errorf("auth_key must be 32-byte AES-256 key (got %d)", len(key))
 	}
+	return append([]byte(nil), key...), nil
+}
 
-	return &Authenticator{key: key, prefix: prefix}, nil
+func DecodeSecretKey(secretData []byte) ([]byte, error) {
+	if len(secretData) == 32 {
+		return append([]byte(nil), secretData...), nil
+	}
+	return DecodeKeyText(string(secretData))
+}
+
+func MintToken(username string, key []byte, prefix string) (string, error) {
+	return mintTokenWithReader(username, key, prefix, rand.Reader)
 }
 
 func (a *Authenticator) Require(r *http.Request) (string, error) {
@@ -95,6 +116,28 @@ func decryptToken(token string, key []byte) (string, error) {
 		return "", err
 	}
 	return string(plaintext), nil
+}
+
+func mintTokenWithReader(username string, key []byte, prefix string, random io.Reader) (string, error) {
+	if len(key) != 32 {
+		return "", fmt.Errorf("auth key must be 32-byte AES-256 key (got %d)", len(key))
+	}
+
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return "", err
+	}
+	aead, err := cipher.NewGCM(block)
+	if err != nil {
+		return "", err
+	}
+
+	nonce := make([]byte, NonceLen)
+	if _, err := io.ReadFull(random, nonce); err != nil {
+		return "", err
+	}
+	ciphertext := aead.Seal(nil, nonce, []byte(prefix+username), nil)
+	return base64.URLEncoding.EncodeToString(append(nonce, ciphertext...)), nil
 }
 
 func decodeURLBase64(value string) ([]byte, error) {
