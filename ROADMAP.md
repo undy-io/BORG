@@ -9,7 +9,9 @@ The Python implementation remains the reference service until the Go implementat
 - Milestone 1 is complete.
 - The Python contract is frozen in `docs/migration/`.
 - The first Go core proxy implementation has been added beside the Python reference.
-- The remaining Milestone 2 work is local hardening and side-by-side validation before moving on to discovery/tooling.
+- Go proxy review hardening is complete for compression/header handling and backend API key precedence.
+- Kubernetes-free side-by-side local smoke validation is implemented under `tests/smoke`.
+- The remaining Milestone 2 decision is whether to move next into Kubernetes discovery or proxy observability/performance hardening.
 
 ## Working Model
 - This roadmap stays high level and milestone-oriented.
@@ -57,6 +59,7 @@ Exit criteria:
 
 Layout target:
 - The planned Go tree is documented in `docs/migration/go-project-layout.md`.
+- The local smoke/parity harness is implemented under `tests/smoke` and documented in `docs/migration/local-smoke-test-harness.md`.
 - The primary service entrypoint should live at `cmd/borg` and build to `bin/borg-go` during migration.
 - Application internals should live under `internal/`.
 

@@ -17,6 +17,7 @@ BORG is being migrated from Python to Go with a side-by-side strategy.
 - Milestone 1 froze the Python contract in `docs/migration/`.
 - Milestone 2 has a first Go core proxy implementation without changing production defaults.
 - The planned Go layout is documented in `docs/migration/go-project-layout.md`.
+- The Kubernetes-free local smoke/parity harness is implemented in `tests/smoke` and documented in `docs/migration/local-smoke-test-harness.md`.
 
 The Go binary is built as `bin/borg-go` during migration so it can run beside the Python `borg` CLI without ambiguity.
 
@@ -138,10 +139,12 @@ uv run ruff check .
 uv run ruff format --check .
 go test ./...
 go build -o bin/borg-go ./cmd/borg
+uv run pytest -q tests/smoke
 ```
 
 Unit tests live under `tests/`.
 Go package tests live beside the Go packages under `internal/`.
+The smoke suite in `tests/smoke` runs the Python and Go proxies side by side against local dummy upstreams.
 
 ---
 
@@ -156,6 +159,7 @@ Go package tests live beside the Go packages under `internal/`.
 | `docs/migration/python-http-contract.md` | Python HTTP/proxy behavior contract |
 | `docs/migration/python-ops-contract.md` | Python discovery, Helm, and runtime ops contract |
 | `docs/migration/go-project-layout.md` | Target side-by-side Go project layout |
+| `docs/migration/local-smoke-test-harness.md` | Local Python-vs-Go smoke/parity harness design |
 
 ---
 

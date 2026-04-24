@@ -216,6 +216,8 @@ Parity tests can start small and grow:
 - add Go tests beside the package being implemented
 - add side-by-side integration tests only after the Go request path exists
 
+The Kubernetes-free local smoke/parity harness is implemented under `tests/smoke` and documented in `docs/migration/local-smoke-test-harness.md`.
+
 ## Build And Run Commands
 These commands are valid after the first Go core proxy implementation:
 
@@ -254,4 +256,5 @@ The first Go skeleton is complete when:
 - the Go service can serve `GET /`
 - config path and port precedence match the Python contract
 - `README.md`, `ROADMAP.md`, `MILESTONE.md`, and `SESSION_RECOVERY.md` describe the side-by-side workflow
+- `docs/migration/local-smoke-test-harness.md` describes how to validate the static proxy path locally before Kubernetes discovery exists in Go
 - Python tests still pass

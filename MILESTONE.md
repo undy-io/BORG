@@ -4,16 +4,21 @@
 - Previous milestone: Milestone 1, "Freeze The Python Contract", complete.
 - Current reference implementation remains Python.
 - First Go core proxy implementation has been added beside Python.
+- Review hardening completed for compression/header behavior and backend API key precedence.
 - Verified:
   - `go test ./...`
+  - `go vet ./...`
   - `go test -bench Streaming ./internal/proxy`
   - `go build -o bin/borg-go ./cmd/borg`
+  - `uv run pytest -q tests/smoke`
   - `uv run pytest -q`
 
 ## Objective
 Introduce a useful Go implementation beside the Python runtime without changing the production deployment path.
 
 The Go service now covers static config loading, auth-compatible POST routing, model registry behavior, `/v1/models`, non-streaming forwarding, and streaming forwarding. Python remains the parity oracle and rollback path.
+
+Local side-by-side smoke validation now runs without Kubernetes.
 
 ## Scope
 In scope:
@@ -90,10 +95,17 @@ Tasks:
 - [x] Implement model registry listing and round-robin endpoint selection.
 - [x] Implement non-streaming forwarding with upstream auth rewrite.
 - [x] Implement streaming forwarding with chunk flushing and downstream cancellation propagation.
+- [x] Harden compression behavior:
+  - non-streaming uses Go transport-managed upstream compression and decoded downstream responses
+  - streaming forces upstream `Accept-Encoding: identity` for SSE latency predictability
+- [x] Strip static hop-by-hop headers and headers named by `Connection` in both proxy directions.
+- [x] Correct Go backend API key precedence to `apikeyEnv` value, inline `apikey`, `API_KEY`, then `EMPTY`.
 
 Validation:
 - [x] Go HTTP tests cover root, models, body validation, auth errors, valid auth, non-stream forwarding, streaming by body flag, streaming by Accept header, and downstream cancellation.
 - [x] Go proxy benchmark records streaming throughput and allocations.
+- [x] Go proxy tests cover compression mode, decoded non-streaming gzip responses, streaming identity, request hop-by-hop stripping, and response hop-by-hop stripping.
+- [x] Go config tests cover env API keys, inline API keys, env-missing inline fallback, `API_KEY` fallback, and `EMPTY` fallback.
 
 ### Checkpoint 4: Documentation And Handoff
 Tasks:
@@ -101,11 +113,12 @@ Tasks:
 - [x] Update `README.md` with migration status and Go commands.
 - [x] Update `ROADMAP.md` with current status.
 - [x] Update `SESSION_RECOVERY.md` for the first Go core proxy implementation.
+- [x] Document the planned local smoke/parity harness for Kubernetes-free validation.
+- [x] Implement the local smoke/parity harness under `tests/smoke`.
 
 Validation:
 - [x] A future session can resume from `SESSION_RECOVERY.md` and know the next code task.
+- [x] `uv run pytest -q tests/smoke` passes with real Python and Go proxy subprocesses.
 
 ## Remaining Work
-- Exercise `bin/borg-go` manually against `dummy-openai`.
-- Add side-by-side Python/Go parity integration tests if useful before discovery work.
 - Decide whether Kubernetes discovery is next or whether to harden proxy performance and observability first.

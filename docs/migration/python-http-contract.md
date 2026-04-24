@@ -216,5 +216,15 @@ Coverage:
 - Query-param forwarding is implemented in code but not pinned by a characterization test yet.
 - Exact response-header passthrough behavior is implemented in code but not fully pinned by tests yet.
 
+## Go First-Pass Accepted Deltas
+The first Go proxy intentionally tightens a few header behaviors while preserving client-visible decoded/plain downstream responses:
+
+- Non-streaming Go requests do not forward client `Accept-Encoding`; Go's transport may negotiate gzip upstream and auto-decode the body before BORG responds downstream.
+- Streaming Go requests send upstream `Accept-Encoding: identity` to avoid gzip buffering and protect SSE/token latency.
+- Go strips both `Trailer` and `Trailers`, plus headers named by `Connection`, in request and response proxying.
+- Go backend API key precedence is `apikeyEnv` value, inline `apikey`, `API_KEY`, then `EMPTY`.
+
+The local smoke/parity harness should treat these as explicit accepted deltas rather than generic parity failures.
+
 ## Go Layout Link
 The HTTP route and proxy responsibilities for the Go implementation are mapped in `docs/migration/go-project-layout.md`.

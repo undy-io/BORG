@@ -7,11 +7,16 @@ Use this file to resume the Go migration if chat history is lost.
 - Last recovered commit: `7d98f84 M1`
 - At recovery time, the branch was one migration commit ahead of `master`
 - Go implementation status: first core proxy implementation added beside Python
+- Latest Go review hardening status: compression/header behavior and backend API key precedence fixed
+- Local smoke/parity harness status: implemented in `tests/smoke/test_local_parity.py`
 - Python implementation status: still the reference runtime and parity oracle
 - Latest verified baseline:
   - `uv run pytest -q`
-  - `42 passed in 60.71s`
+  - `56 passed in 38.99s`
+  - `uv run pytest -q tests/smoke`
+  - `14 passed in 22.76s`
   - `go test ./...`
+  - `go vet ./...`
   - `go test -bench Streaming ./internal/proxy`
   - `go build -o bin/borg-go ./cmd/borg`
 
@@ -44,6 +49,7 @@ Milestone 1 produced the frozen Python contract docs:
 
 Milestone 2 documentation produced:
 - `docs/migration/go-project-layout.md`
+- `docs/migration/local-smoke-test-harness.md`
 
 Milestone 2 code produced:
 - `go.mod` and `go.sum`
@@ -54,6 +60,13 @@ Milestone 2 code produced:
 - `internal/httpapi`
 - `internal/openai`
 - `internal/proxy`
+- `tests/smoke/test_local_parity.py`
+
+Milestone 2 review hardening completed:
+- Go non-streaming forwarding strips client `Accept-Encoding` and relies on Go transport-managed gzip/decode.
+- Go streaming forwarding sends upstream `Accept-Encoding: identity` to protect SSE latency.
+- Go request and response header filtering strips static hop-by-hop headers and headers named by `Connection`.
+- Go backend API key precedence is `apikeyEnv` value, inline `apikey`, `API_KEY`, then `EMPTY`.
 
 Milestone 1 also added or strengthened characterization coverage around:
 - invalid or non-object JSON request bodies
@@ -153,12 +166,11 @@ Later packages:
 During migration, build the service as `bin/borg-go` so it can run beside the Python `borg` CLI.
 
 ## Next Step
-Review and harden the first Go core proxy implementation.
+Decide the next implementation lane now that the Kubernetes-free local smoke/parity harness is green.
 
 Recommended next tasks:
-- Run `bin/borg-go` manually against `dummy-openai`.
-- Add side-by-side parity tests if useful.
-- Decide whether Kubernetes discovery or proxy observability/performance hardening comes next.
+- Review whether Kubernetes discovery or proxy observability/performance hardening should be next.
+- Keep `go build -o bin/borg-go ./cmd/borg && uv run pytest -q tests/smoke` as the local static-path validation loop.
 - Do not change Helm defaults to Go yet.
 
 ## Useful Commands
@@ -168,5 +180,8 @@ uv run ruff check .
 uv run ruff format --check .
 go version
 go test ./...
+go vet ./...
+go test -bench Streaming ./internal/proxy
 go build -o bin/borg-go ./cmd/borg
+uv run pytest -q tests/smoke
 ```
