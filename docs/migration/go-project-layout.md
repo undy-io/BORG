@@ -227,6 +227,7 @@ Parity tests can start small and grow:
 - add side-by-side integration tests only after the Go request path exists
 
 The Kubernetes-free local smoke/parity harness is implemented under `tests/smoke` and documented in `docs/migration/local-smoke-test-harness.md`.
+The fake Kubernetes API smoke harness is implemented under `tests/k8s_smoke` and documented in `docs/migration/go-k8s-smoke-test-harness.md`.
 
 ## Build And Run Commands
 These commands are valid for the side-by-side Go implementation:
@@ -267,6 +268,8 @@ The side-by-side Go baseline is useful when:
 - config path and port precedence match the Python contract
 - core proxy behavior is covered by Go package tests and local smoke tests
 - Kubernetes discovery is covered by Go package tests
+- Go Kubernetes discovery is covered by a fake API smoke test against the real `bin/borg-go` process
 - `README.md`, `ROADMAP.md`, `MILESTONE.md`, and `SESSION_RECOVERY.md` describe the side-by-side workflow
 - `docs/migration/local-smoke-test-harness.md` describes how to validate the static proxy path locally without Kubernetes
+- `docs/migration/go-k8s-smoke-test-harness.md` describes how to validate Go discovery locally without a real cluster
 - Python tests still pass

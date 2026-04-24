@@ -12,6 +12,7 @@ The Python implementation remains the reference service until the Go implementat
 - Go proxy review hardening is complete for compression/header handling and backend API key precedence.
 - Kubernetes-free side-by-side local smoke validation is implemented under `tests/smoke`.
 - Go Kubernetes discovery is implemented behind the existing static proxy path.
+- Fake Kubernetes API smoke validation for Go discovery is implemented under `tests/k8s_smoke`.
 - Helm, Docker, CI defaults, and the Python runtime are still unchanged.
 
 ## Working Model
@@ -61,6 +62,7 @@ Exit criteria:
 Layout target:
 - The planned Go tree is documented in `docs/migration/go-project-layout.md`.
 - The local smoke/parity harness is implemented under `tests/smoke` and documented in `docs/migration/local-smoke-test-harness.md`.
+- The fake Kubernetes API smoke harness is implemented under `tests/k8s_smoke` and documented in `docs/migration/go-k8s-smoke-test-harness.md`.
 - The primary service entrypoint should live at `cmd/borg` and build to `bin/borg-go` during migration.
 - Application internals should live under `internal/`.
 
@@ -85,7 +87,8 @@ Bring over the cluster-aware and operational parts that make BORG deployable in 
 Note: Kubernetes polling discovery was pulled forward into Milestone 2 so it could be tested before deployment cutover. Milestone 4 should focus on the remaining operational tooling and deployment path.
 
 Outcomes:
-- Validate Kubernetes discovery in a local or cluster-backed deployment loop.
+- Validate Kubernetes discovery in a local fake API smoke loop before deployment wiring.
+- Validate Kubernetes discovery in a cluster-backed deployment loop after deployment wiring exists.
 - Port or replace the token generation utility so issued tokens remain compatible.
 - Add container build support and any required CI jobs for the Go implementation.
 - Keep Helm and deployment inputs aligned while the repo supports both runtimes.

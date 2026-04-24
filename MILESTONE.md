@@ -6,6 +6,7 @@
 - First Go core proxy implementation has been added beside Python.
 - Review hardening completed for compression/header behavior and backend API key precedence.
 - Go Kubernetes discovery has been added behind the existing static proxy path.
+- Fake Kubernetes API smoke validation has been added for the Go discovery path.
 - Helm, Docker, CI defaults, and the Python runtime are unchanged.
 - Verified:
   - `go test ./...`
@@ -13,6 +14,7 @@
   - `go test -bench Streaming ./internal/proxy`
   - `go build -o bin/borg-go ./cmd/borg`
   - `uv run pytest -q tests/smoke`
+  - `uv run pytest -q tests/k8s_smoke`
   - `uv run pytest -q`
 
 ## Objective
@@ -150,8 +152,23 @@ Validation:
 - [x] Kubernetes discovery tests cover pod eligibility, defaults, annotation overrides, model parsing, automodel success/failure, and list errors.
 - [x] App wiring tests cover discovery gating, init failure fallback, discovered model registration, and clean shutdown.
 
+### Checkpoint 6: Local Kubernetes Discovery Smoke
+Tasks:
+- [x] Add a fake Kubernetes API server smoke harness under `tests/k8s_smoke`.
+- [x] Run the real `bin/borg-go` process with a temporary kubeconfig pointed at the fake API.
+- [x] Start local OpenAI-compatible dummy upstreams for discovered endpoint traffic.
+- [x] Cover annotation discovery and namespace/selector request shape.
+- [x] Cover automodel discovery through `/v1/models`.
+- [x] Cover successful reconciliation removal after pods disappear.
+- [x] Cover failed Kubernetes list preservation of the last successful snapshot.
+- [x] Cover endpoint annotation overrides during forwarding.
+
+Validation:
+- [x] `go build -o bin/borg-go ./cmd/borg`
+- [x] `uv run pytest -q tests/k8s_smoke`
+
 ## Remaining Work
-- Add a Kubernetes-capable local or KinD validation loop for Go discovery when deployment wiring is ready.
+- Add KinD or real-cluster deployment validation when Go Helm/Docker wiring is ready.
 - Port or replace `borg-genkey`.
 - Decide when to add Go container/Helm/CI wiring.
 - Keep static-path smoke validation green while discovery evolves.

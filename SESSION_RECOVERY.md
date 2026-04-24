@@ -5,10 +5,11 @@ Use this file to resume the Go migration if chat history is lost.
 ## Current Branch State
 - Branch: `go-migration`
 - Last committed baseline: `91d17a2 Initial http parity smoke test`
-- Current uncommitted migration work: Go Kubernetes discovery, app discovery lifecycle wiring, Kubernetes dependency updates, documentation refresh, and IPv6-safe discovered endpoint URLs
+- Current uncommitted migration work: fake Kubernetes API smoke validation for Go discovery
 - Go implementation status: static proxy path and Kubernetes discovery are implemented beside Python
 - Latest Go review hardening status: compression/header behavior, backend API key precedence, Kubernetes discovery lifecycle, and discovered endpoint URL construction
 - Local smoke/parity harness status: implemented in `tests/smoke/test_local_parity.py`
+- Go Kubernetes smoke harness status: implemented in `tests/k8s_smoke/test_go_k8s_discovery.py`
 - Go Kubernetes discovery status: implemented with `client-go` behind the existing static proxy path
 - Python implementation status: still the reference runtime and parity oracle
 - Latest verified baseline:
@@ -16,13 +17,15 @@ Use this file to resume the Go migration if chat history is lost.
   - `56 passed`
   - `uv run pytest -q tests/smoke`
   - `14 passed`
+  - `uv run pytest -q tests/k8s_smoke`
+  - `5 passed`
   - `go test ./...`
   - `go vet ./...`
   - `go test -bench Streaming ./internal/proxy`
   - `go build -o bin/borg-go ./cmd/borg`
 
 Local uncommitted state:
-- Go discovery implementation, IPv6 endpoint fix, dependency updates, tests, and docs are modified but not committed.
+- Fake Kubernetes smoke test suite and docs are modified but not committed.
 - `.codex` exists as an untracked local file and is unrelated to the migration changes.
 
 ## Project Goal
@@ -64,6 +67,7 @@ Milestone 2 code produced:
 - `internal/openai`
 - `internal/proxy`
 - `tests/smoke/test_local_parity.py`
+- `tests/k8s_smoke/test_go_k8s_discovery.py`
 
 Milestone 2 review hardening completed:
 - Go non-streaming forwarding strips client `Accept-Encoding` and relies on Go transport-managed gzip/decode.
@@ -87,6 +91,13 @@ Milestone 2 Kubernetes discovery completed:
 - Discovery initialization failures are logged and static config continues to serve.
 - Discovery runs one immediate reconciliation, then repeats every `update_interval` seconds.
 - `App.Close()` cancels and waits for background discovery; `cmd/borg` defers it.
+
+Milestone 2 fake Kubernetes smoke validation completed:
+- `tests/k8s_smoke/test_go_k8s_discovery.py` runs the real `bin/borg-go` subprocess.
+- The suite writes a temporary kubeconfig pointing `client-go` at a localhost fake Kubernetes API.
+- The fake API implements pod list responses for configured namespaces and selectors.
+- Local dummy OpenAI-compatible upstreams make discovered endpoints callable from the Go process.
+- Coverage includes annotation discovery, automodel discovery, authoritative removal, failed-list snapshot preservation, selector request shape, and endpoint annotation overrides.
 
 Milestone 1 also added or strengthened characterization coverage around:
 - invalid or non-object JSON request bodies
@@ -186,11 +197,12 @@ Later packages:
 During migration, build the service as `bin/borg-go` so it can run beside the Python `borg` CLI.
 
 ## Next Step
-Decide whether the next lane is a local Kubernetes smoke harness, `borg-genkey`, or Go deployment wiring now that Go Kubernetes discovery validation is green.
+Decide whether the next lane is `borg-genkey`, opt-in Go deployment wiring, or KinD validation now that local fake Kubernetes discovery validation is green.
 
 Recommended next tasks:
 - Keep `go build -o bin/borg-go ./cmd/borg && uv run pytest -q tests/smoke` as the local static-path validation loop.
-- Add a KinD or fake-cluster smoke path before switching Helm/Docker defaults to Go.
+- Keep `go build -o bin/borg-go ./cmd/borg && uv run pytest -q tests/k8s_smoke` as the local discovery validation loop.
+- Add KinD validation before switching Helm/Docker defaults to Go.
 - Port or replace `borg-genkey` before final runtime cutover.
 - Do not change Helm defaults to Go yet.
 
@@ -205,4 +217,5 @@ go vet ./...
 go test -bench Streaming ./internal/proxy
 go build -o bin/borg-go ./cmd/borg
 uv run pytest -q tests/smoke
+uv run pytest -q tests/k8s_smoke
 ```
