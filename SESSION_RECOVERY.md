@@ -4,14 +4,15 @@ Use this file to resume the Go migration if chat history is lost.
 
 ## Current Branch State
 - Branch: `go-migration`
-- Last committed baseline: `91d17a2 Initial http parity smoke test`
-- Current uncommitted migration work: Go `borg-genkey` utility and shared auth token helpers
+- Last committed baseline: `fc39536 Add Go borg-genkey utility`
+- Current uncommitted migration work: devcontainer KinD enablement only
 - Go implementation status: static proxy path, Kubernetes discovery, fake Kubernetes discovery smoke validation, and token generation utility are implemented beside Python
 - Latest Go review hardening status: compression/header behavior, backend API key precedence, Kubernetes discovery lifecycle, and discovered endpoint URL construction
 - Local smoke/parity harness status: implemented in `tests/smoke/test_local_parity.py`
 - Go Kubernetes smoke harness status: implemented in `tests/k8s_smoke/test_go_k8s_discovery.py`
 - Go Kubernetes discovery status: implemented with `client-go` behind the existing static proxy path
 - Go token utility status: implemented in `cmd/borg-genkey`
+- KinD status: Docker-in-Docker inside the devcontainer is blocked by non-writable cpuset cgroups, but raw WSL KinD works with the Kubernetes v1.34.3 node image pinned and manual Go BORG discovery validation is green
 - Python implementation status: still the reference runtime and parity oracle
 - Latest verified baseline:
   - `uv run pytest -q`
@@ -25,9 +26,31 @@ Use this file to resume the Go migration if chat history is lost.
   - `go test -bench Streaming ./internal/proxy`
   - `go build -o bin/borg-go ./cmd/borg`
   - `go build -o bin/borg-genkey ./cmd/borg-genkey`
+- Latest pre-rebuild devcontainer checks:
+  - `jq . .devcontainer/devcontainer.json`
+  - `bash -n .devcontainer/post-create.sh`
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run python -c "import pathlib, yaml; yaml.safe_load(pathlib.Path('.devcontainer/docker-compose.yml').read_text()); print('ok')"`
+  - `git diff --check -- .devcontainer/devcontainer.json .devcontainer/docker-compose.yml .devcontainer/post-create.sh SESSION_RECOVERY.md MILESTONE.md ROADMAP.md README.md docs/migration/go-project-layout.md`
+- Latest host WSL KinD checks:
+  - `kind create cluster --name borg --config kind-config.yaml --image kindest/node:v1.34.3@sha256:08497ee19eace7b4b5348db5c6a1591d7752b164530a36f855cb0f2bdcbadd48`
+  - `kubectl wait --for=condition=Ready node/borg-control-plane --timeout=120s`
+  - `kubectl get nodes`
+  - `kubectl get pods -A`
+- Latest manual KinD deployment checks:
+  - `docker build -t dummy-openai:kind ./dummy-openai`
+  - `kind load docker-image dummy-openai:kind --name borg`
+  - `helm upgrade --install dummy-openai ./dummy-openai/charts/dummy-openai -n vllm-services --set image.repository=dummy-openai --set image.tag=kind --set image.pullPolicy=IfNotPresent`
+  - temporary Go image built as `borg-go:kind`; retry with `docker build --network=host` or a prebuilt binary image if `go mod download` times out
+  - `kind load docker-image borg-go:kind --name borg`
+  - `helm upgrade --install borg ./charts/borg -n borg ...` with image repository `borg-go`, tag `kind`, ingress disabled, update interval `2`, and discovery pointed at `vllm-services` selector `borg/expose=vllm`
+  - `kubectl -n borg port-forward svc/borg-borg 18080:80`
+  - `curl -fsS http://127.0.0.1:18080/` returned `{"detail":"Proxy router is running","status":"ok"}`
+  - `curl -fsS http://127.0.0.1:18080/v1/models` returned a model list containing `gpt-3.5-turbo`
 
 Local uncommitted state:
-- Go `borg-genkey`, shared auth token helpers, tests, and docs are modified but not committed.
+- `.devcontainer/devcontainer.json` adds Docker-in-Docker and kubectl/Helm devcontainer features.
+- `.devcontainer/docker-compose.yml` makes the `app` service explicitly `privileged`, uses host cgroup namespace, and mounts `/sys/fs/cgroup` read-write for nested Docker/KinD; this was not sufficient in the current host environment.
+- `.devcontainer/post-create.sh` installs `kind` with `go install sigs.k8s.io/kind@v0.31.0`.
 - `.codex` exists as an untracked local file and is unrelated to the migration changes.
 
 ## Project Goal
@@ -41,7 +64,7 @@ Migrate BORG from Python to Go using a side-by-side approach. Python remains the
 - Keep Python working throughout the migration.
 - Add Go beside Python, then validate side by side before cutover.
 - Prefer external behavior parity over early optimization.
-- Do not remove Python runtime, CI, container, or Helm paths before final cutover.
+- After KinD validation is green, a hard cutover to Go is acceptable because BORG is not deployed anywhere yet.
 
 ## Milestone Status
 Milestone 1, "Freeze The Python Contract", is complete.
@@ -111,6 +134,26 @@ Milestone 2 Go token utility completed:
 - Secret data supports migrated printable URL-safe auth key text and legacy raw 32-byte AES keys.
 - Tokens use AES-256-GCM with plaintext `auth_prefix + username` and base64url `nonce || ciphertext+tag`.
 
+Milestone 2 devcontainer KinD enablement in progress:
+- `.devcontainer/devcontainer.json` uses the official Docker-in-Docker feature so KinD can run node containers inside the devcontainer.
+- `.devcontainer/devcontainer.json` uses the official kubectl/Helm/Minikube feature with Minikube disabled.
+- `.devcontainer/docker-compose.yml` explicitly sets `app.privileged: true`.
+- `.devcontainer/docker-compose.yml` sets `app.cgroup: host` and mounts `/sys/fs/cgroup:/sys/fs/cgroup:rw`.
+- `.devcontainer/post-create.sh` installs KinD as a Go tool at `sigs.k8s.io/kind@v0.31.0`.
+- Rebuilds installed Docker/KinD/kubectl, but `kind create cluster` failed when the nested Docker daemon could not create `/sys/fs/cgroup/cpuset/docker`.
+- Direct `docker run --rm kindest/node:... true` also fails with the same cgroup error, so the nested Docker daemon cannot run containers at all.
+- `docker info` from the rebuilt devcontainer reports Docker Engine 29.4.1, `Cgroup Driver: cgroupfs`, and `Cgroup Version: 1`.
+- Real cgroup inspection shows `/sys/fs/cgroup/cpuset` mounted read/write but the directory itself is `dr-xr-xr-x` and owned by `nobody:nogroup`, so root inside the container cannot create `/sys/fs/cgroup/cpuset/docker`.
+- Treat Docker-in-Docker KinD as not viable in this environment unless the host/devcontainer runtime changes to one with writable cgroups or cgroup v2 support.
+- Host/raw WSL KinD works when the node image is pinned to Kubernetes v1.34.3:
+  - `kindest/node:v1.34.3@sha256:08497ee19eace7b4b5348db5c6a1591d7752b164530a36f855cb0f2bdcbadd48`
+- `kind v0.31.0` defaulted to Kubernetes v1.35.0, which failed on the WSL cgroup v1 runtime with kubelet health errors.
+- `kubectl wait --for=condition=Ready node/borg-control-plane --timeout=120s` passed on the pinned v1.34.3 cluster.
+- Core pods in `kube-system` and `local-path-storage` were all `Running`.
+- Manual cluster deployment validation is green for Go BORG startup, Kubernetes discovery, Service access, and `/v1/models`.
+- The current dummy backend only implements `GET /v1/models`, so manual KinD validation does not yet cover POST forwarding or streaming.
+- Official feature metadata was checked: Docker-in-Docker supports `moby` and `dockerDashComposeVersion`, declares privileged mode, and kubectl/Helm/Minikube supports `version`, `helm`, and `minikube`.
+
 Milestone 1 also added or strengthened characterization coverage around:
 - invalid or non-object JSON request bodies
 - missing model request bodies
@@ -164,6 +207,12 @@ Discovery and ops:
   - Go devcontainer feature pinned to `1.26.2`
   - VS Code Go extension added
   - post-create installs `gopls`, `goimports`, and `dlv`
+- Devcontainer KinD enablement is staged:
+  - Docker-in-Docker feature added with Docker CE and Docker Compose v2
+  - kubectl/Helm feature added with Minikube disabled
+  - `app` service marked privileged
+  - `app` service uses host cgroup namespace and a read-write `/sys/fs/cgroup` mount, but this does not make nested Docker usable on the current host
+  - post-create installs `kind`
 - Python auth/runtime updates:
   - `AUTH_KEY` added as preferred auth env var
   - `BORG_AUTH_KEY` retained as legacy fallback
@@ -208,14 +257,22 @@ During migration, build the service as `bin/borg-go` so it can run beside the Py
 Build the token utility as `bin/borg-genkey` while Python `genkey.py` remains available.
 
 ## Next Step
-Decide whether the next lane is opt-in Go deployment wiring or KinD validation now that local fake Kubernetes discovery validation and Go token generation are green.
+Convert the successful raw WSL KinD manual validation into a repeatable script or pytest harness, then extend the backend coverage to POST forwarding and streaming. If the full KinD deployment path is green, proceed with a hard cutover to Go.
 
 Recommended next tasks:
+- Use this host WSL cluster setup command:
+  - `kind create cluster --name borg --config kind-config.yaml --image kindest/node:v1.34.3@sha256:08497ee19eace7b4b5348db5c6a1591d7752b164530a36f855cb0f2bdcbadd48`
+- Verify it with:
+  - `kubectl wait --for=condition=Ready node/borg-control-plane --timeout=120s`
+  - `kubectl get nodes`
+  - `kubectl get pods -A`
+- Commit the devcontainer and KinD state/documentation changes once reviewed.
+- Build a KinD validation suite that exercises the containerized Go service against dummy annotated upstream pods.
+- Extend the KinD dummy backend to support POST `/v1/chat/completions` and SSE streaming.
+- After KinD validation is green, switch Docker/Helm defaults to Go.
 - Keep `go build -o bin/borg-go ./cmd/borg && uv run pytest -q tests/smoke` as the local static-path validation loop.
 - Keep `go build -o bin/borg-go ./cmd/borg && uv run pytest -q tests/k8s_smoke` as the local discovery validation loop.
 - Keep `go build -o bin/borg-genkey ./cmd/borg-genkey && go test ./cmd/borg-genkey ./internal/auth` as the token utility validation loop.
-- Add KinD validation before switching Helm/Docker defaults to Go.
-- Do not change Helm defaults to Go yet.
 
 ## Useful Commands
 ```bash
@@ -230,4 +287,12 @@ go build -o bin/borg-go ./cmd/borg
 go build -o bin/borg-genkey ./cmd/borg-genkey
 uv run pytest -q tests/smoke
 uv run pytest -q tests/k8s_smoke
+docker version
+kind version
+kubectl version --client
+kind create cluster --name borg --config kind-config.yaml --image kindest/node:v1.34.3@sha256:08497ee19eace7b4b5348db5c6a1591d7752b164530a36f855cb0f2bdcbadd48
+kubectl wait --for=condition=Ready node/borg-control-plane --timeout=120s
+kubectl get nodes
+kubectl get pods -A
+kind delete cluster --name borg
 ```

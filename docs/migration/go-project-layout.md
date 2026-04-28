@@ -9,7 +9,10 @@ The goal is to make the Go service easy to build, test, and compare without chan
 - Python remains the reference runtime.
 - A first Go core proxy implementation exists beside the Python runtime.
 - Go Kubernetes discovery is implemented behind the existing static proxy path.
-- The devcontainer already includes Go tooling.
+- The devcontainer includes Go, Docker, KinD, kubectl, and Helm tooling.
+- In the current rootless/containerized WSL environment, Docker-in-Docker cannot start containers because cpuset cgroups are not writable; KinD validation needs host/outside-devcontainer Docker, Docker-outside-of-Docker, or CI/VM infrastructure.
+- Host/raw WSL KinD validation works with the node image pinned to Kubernetes v1.34.3.
+- Manual raw WSL KinD validation has proven Go BORG startup, Kubernetes discovery, Service access, and `/v1/models` against an annotated dummy backend.
 - The Python contract is frozen in:
   - `docs/migration/python-runtime-contract.md`
   - `docs/migration/python-http-contract.md`
@@ -237,6 +240,20 @@ Parity tests can start small and grow:
 
 The Kubernetes-free local smoke/parity harness is implemented under `tests/smoke` and documented in `docs/migration/local-smoke-test-harness.md`.
 The fake Kubernetes API smoke harness is implemented under `tests/k8s_smoke` and documented in `docs/migration/go-k8s-smoke-test-harness.md`.
+
+On a host/runtime with usable Docker cgroups, validate the local KinD toolchain with:
+
+```bash
+docker version
+kind version
+kubectl version --client
+kind create cluster --name borg --config kind-config.yaml \
+  --image kindest/node:v1.34.3@sha256:08497ee19eace7b4b5348db5c6a1591d7752b164530a36f855cb0f2bdcbadd48
+kubectl wait --for=condition=Ready node/borg-control-plane --timeout=120s
+kubectl get nodes
+kubectl get pods -A
+kind delete cluster --name borg
+```
 
 ## Build And Run Commands
 These commands are valid for the side-by-side Go implementation:

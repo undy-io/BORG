@@ -17,6 +17,9 @@ BORG is being migrated from Python to Go with a side-by-side strategy.
 - Milestone 1 froze the Python contract in `docs/migration/`.
 - Milestone 2 has a first Go core proxy implementation and Go Kubernetes discovery without changing production defaults.
 - A Go `borg-genkey` replacement is available during migration as `bin/borg-genkey`.
+- The devcontainer has Docker/KinD/kubectl/Helm tooling, but Docker-in-Docker KinD is blocked in the current rootless/containerized WSL environment by non-writable cpuset cgroups.
+- Host/raw WSL KinD works when the node image is pinned to Kubernetes v1.34.3.
+- Manual raw WSL KinD validation has proven the Go BORG service can discover an annotated dummy backend and serve `/v1/models` from the cluster.
 - The planned Go layout is documented in `docs/migration/go-project-layout.md`.
 - The Kubernetes-free local smoke/parity harness is implemented in `tests/smoke` and documented in `docs/migration/local-smoke-test-harness.md`.
 - The fake Kubernetes API smoke harness for Go discovery is implemented in `tests/k8s_smoke` and documented in `docs/migration/go-k8s-smoke-test-harness.md`.
@@ -61,7 +64,8 @@ docker run -p 8000:8000 -v $PWD/config.yaml:/app/config.yaml borg:dev
 ### 3 – KinD + Helm (offline loop)
 
 ```bash
-kind create cluster --name borg-dev --config kind-config.yaml
+kind create cluster --name borg-dev --config kind-config.yaml \
+  --image kindest/node:v1.34.3@sha256:08497ee19eace7b4b5348db5c6a1591d7752b164530a36f855cb0f2bdcbadd48
 helm repo add ingress-nginx https://kubernetes.github.io/ingress-nginx
 helm install ingress ingress-nginx/ingress-nginx --create-namespace --namespace ingress-nginx
 
@@ -144,6 +148,20 @@ go build -o bin/borg-go ./cmd/borg
 go build -o bin/borg-genkey ./cmd/borg-genkey
 uv run pytest -q tests/smoke
 uv run pytest -q tests/k8s_smoke
+```
+
+On a host/runtime with usable Docker cgroups, validate KinD tooling with:
+
+```bash
+docker version
+kind version
+kubectl version --client
+kind create cluster --name borg --config kind-config.yaml \
+  --image kindest/node:v1.34.3@sha256:08497ee19eace7b4b5348db5c6a1591d7752b164530a36f855cb0f2bdcbadd48
+kubectl wait --for=condition=Ready node/borg-control-plane --timeout=120s
+kubectl get nodes
+kubectl get pods -A
+kind delete cluster --name borg
 ```
 
 Unit tests live under `tests/`.

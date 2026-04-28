@@ -14,6 +14,9 @@ The Python implementation remains the reference service until the Go implementat
 - Go Kubernetes discovery is implemented behind the existing static proxy path.
 - Fake Kubernetes API smoke validation for Go discovery is implemented under `tests/k8s_smoke`.
 - Go `borg-genkey` is implemented beside Python `genkey.py`.
+- Devcontainer Docker/KinD/kubectl/Helm tooling installs, but Docker-in-Docker KinD is blocked in the current rootless/containerized WSL environment by non-writable cpuset cgroups.
+- Host/raw WSL KinD validation works with the node image pinned to Kubernetes v1.34.3.
+- Manual raw WSL KinD validation has proven the Go BORG service can discover an annotated dummy backend and serve `/v1/models` from a real cluster deployment.
 - Helm, Docker, CI defaults, and the Python runtime are still unchanged.
 
 ## Working Model
@@ -89,7 +92,10 @@ Note: Kubernetes polling discovery was pulled forward into Milestone 2 so it cou
 
 Outcomes:
 - Validate Kubernetes discovery in a local fake API smoke loop before deployment wiring.
+- Validate Docker/KinD/kubectl on a host/runtime with usable cgroups, or move KinD validation to CI/VM infrastructure.
+- Use the raw WSL KinD path with the pinned v1.34.3 node image for current local cluster validation.
 - Validate Kubernetes discovery in a cluster-backed deployment loop after deployment wiring exists.
+- Automate the current manual KinD discovery validation and extend it to POST forwarding and streaming.
 - Keep the Go token generation utility compatible with Python-issued and Go-issued tokens.
 - Add container build support and any required CI jobs for the Go implementation.
 - Keep Helm and deployment inputs aligned while the repo supports both runtimes.
