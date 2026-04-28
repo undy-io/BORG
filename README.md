@@ -20,6 +20,7 @@ BORG is being migrated from Python to Go with a side-by-side strategy.
 - The devcontainer has Docker/KinD/kubectl/Helm tooling, but Docker-in-Docker KinD is blocked in the current rootless/containerized WSL environment by non-writable cpuset cgroups.
 - Host/raw WSL KinD works when the node image is pinned to Kubernetes v1.34.3.
 - Manual raw WSL KinD validation has proven the Go BORG service can discover an annotated dummy backend and serve `/v1/models` from the cluster.
+- `scripts/validate-kind-go.sh` automates the host/raw WSL KinD Go validation loop.
 - The planned Go layout is documented in `docs/migration/go-project-layout.md`.
 - The Kubernetes-free local smoke/parity harness is implemented in `tests/smoke` and documented in `docs/migration/local-smoke-test-harness.md`.
 - The fake Kubernetes API smoke harness for Go discovery is implemented in `tests/k8s_smoke` and documented in `docs/migration/go-k8s-smoke-test-harness.md`.
@@ -148,9 +149,28 @@ go build -o bin/borg-go ./cmd/borg
 go build -o bin/borg-genkey ./cmd/borg-genkey
 uv run pytest -q tests/smoke
 uv run pytest -q tests/k8s_smoke
+bash -n scripts/validate-kind-go.sh
 ```
 
-On a host/runtime with usable Docker cgroups, validate KinD tooling with:
+On raw WSL/host, validate the Go BORG runtime against KinD with:
+
+```bash
+scripts/validate-kind-go.sh
+```
+
+To create and delete the KinD cluster inside the validation run:
+
+```bash
+scripts/validate-kind-go.sh --create-cluster --delete-cluster
+```
+
+The harness uses this pinned Kubernetes node image by default because this WSL runtime reports cgroup v1:
+
+```text
+kindest/node:v1.34.3@sha256:08497ee19eace7b4b5348db5c6a1591d7752b164530a36f855cb0f2bdcbadd48
+```
+
+For manual KinD toolchain checks:
 
 ```bash
 docker version

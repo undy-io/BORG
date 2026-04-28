@@ -4,6 +4,8 @@ Dummy OpenAI backend
 
 This helper service is used for local BORG testing with KinD and Helm. It gives BORG an OpenAI-compatible backend to discover while the main service is being developed or migrated.
 
+It implements `GET /v1/models` plus deterministic `POST /v1/chat/completions` responses. When the request body contains `"stream": true`, it returns SSE chunks ending with `data: [DONE]`.
+
 Build and load the image:
 
 ```bash

@@ -10,6 +10,7 @@
 - Go `borg-genkey` has been added beside Python `genkey.py`.
 - Host WSL KinD validation is available with a pinned Kubernetes v1.34.3 node image.
 - Manual KinD deployment validation has proven the Go BORG service discovers the annotated dummy backend in a real cluster.
+- A repeatable host/WSL KinD Go validation harness has been added and validated.
 - Docker-in-Docker KinD inside the devcontainer is blocked in the current rootless/containerized WSL environment.
 - Helm, Docker, CI defaults, and the Python runtime are unchanged.
 - Verified:
@@ -44,6 +45,7 @@ In scope:
 - Failed-pass discovery snapshot preservation
 - Go token generation utility
 - Host WSL Docker/KinD/kubectl validation setup
+- Repeatable host/WSL KinD Go validation harness
 - Local Go tests, benchmark, and build command
 - Keeping Python tests green
 
@@ -68,6 +70,7 @@ internal/discovery/k8s/
 internal/httpapi/
 internal/openai/
 internal/proxy/
+scripts/validate-kind-go.sh
 go.mod
 go.sum
 ```
@@ -247,8 +250,35 @@ Notes:
 - Temporary Go image builds may need `docker build --network=host` or a prebuilt local binary image if `go mod download` times out inside Docker.
 - The manual validation currently covers BORG startup, Kubernetes discovery, Service access, and `/v1/models`; POST forwarding and streaming need an enhanced dummy backend and automated harness.
 
+### Checkpoint 10: Repeatable KinD Go Validation Harness
+Tasks:
+- [x] Add `scripts/validate-kind-go.sh` for host/WSL KinD validation.
+- [x] Default the script to the pinned Kubernetes v1.34.3 node image.
+- [x] Make cluster creation optional via `--create-cluster`.
+- [x] Permit cluster deletion only when the script created the cluster.
+- [x] Build Go binaries on the host and package `borg-go:kind` from the local binary.
+- [x] Build and load `dummy-openai:kind`.
+- [x] Deploy dummy backend and Go BORG through Helm.
+- [x] Generate an auth token with the built Go `borg-genkey`.
+- [x] Validate root, discovered models, missing auth, authenticated POST forwarding, and SSE streaming.
+- [x] Print Kubernetes diagnostics on failure.
+- [x] Extend `dummy-openai` with POST `/v1/chat/completions` and deterministic SSE output.
+
+Validation:
+- [x] `bash -n scripts/validate-kind-go.sh`
+- [x] `scripts/validate-kind-go.sh --help`
+- [x] `uv run ruff check dummy-openai/main.py`
+- [x] `go test ./...`
+- [x] `uv run pytest -q tests/smoke`
+- [x] `uv run pytest -q tests/k8s_smoke`
+- [x] `scripts/validate-kind-go.sh --create-cluster --delete-cluster`
+
+Notes:
+- The harness is intended to run from raw WSL/host, not inside the devcontainer.
+- The script leaves deployed resources in place by default for debugging; use `--cleanup-resources` to remove Helm releases and namespaces.
+- The localhost smoke suites needed to be rerun outside the Codex sandbox after the devcontainer rebuild because the sandboxed run timed out waiting for proxy readiness with empty logs.
+- The full lifecycle host WSL run passed: cluster create, image build/load, Helm deploy, root/models checks, missing-auth rejection, authenticated POST forwarding, SSE streaming, and cluster delete.
+
 ## Remaining Work
-- Turn the manual KinD deployment validation into a repeatable script or pytest harness.
-- Extend the KinD validation backend to cover POST forwarding and streaming.
 - Switch Docker and Helm defaults to Go after KinD validation is green.
 - Keep static-path smoke validation green while discovery evolves.

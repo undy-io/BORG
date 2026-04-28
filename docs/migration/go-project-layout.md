@@ -13,6 +13,7 @@ The goal is to make the Go service easy to build, test, and compare without chan
 - In the current rootless/containerized WSL environment, Docker-in-Docker cannot start containers because cpuset cgroups are not writable; KinD validation needs host/outside-devcontainer Docker, Docker-outside-of-Docker, or CI/VM infrastructure.
 - Host/raw WSL KinD validation works with the node image pinned to Kubernetes v1.34.3.
 - Manual raw WSL KinD validation has proven Go BORG startup, Kubernetes discovery, Service access, and `/v1/models` against an annotated dummy backend.
+- `scripts/validate-kind-go.sh` automates host/raw WSL KinD validation for Go BORG discovery, authenticated POST forwarding, and streaming.
 - The Python contract is frozen in:
   - `docs/migration/python-runtime-contract.md`
   - `docs/migration/python-http-contract.md`
@@ -253,6 +254,13 @@ kubectl wait --for=condition=Ready node/borg-control-plane --timeout=120s
 kubectl get nodes
 kubectl get pods -A
 kind delete cluster --name borg
+```
+
+Run the repeatable Go KinD validation harness from raw WSL/host:
+
+```bash
+scripts/validate-kind-go.sh
+scripts/validate-kind-go.sh --create-cluster --delete-cluster
 ```
 
 ## Build And Run Commands
