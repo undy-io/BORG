@@ -10,6 +10,8 @@ __pycache__/
 .Python
 bin/
 build/
+/borg
+/borg-genkey
 develop-eggs/
 dist/
 downloads/

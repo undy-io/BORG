@@ -1,14 +1,16 @@
 # Go Project Layout
 
 ## Purpose
-This document defines the Go repository shape that should exist beside the current Python implementation during the migration.
+This document defines the Go repository shape used by the default BORG runtime.
 
-The goal is to make the Go service easy to build, test, and compare without changing the production Python path until parity is proven.
+The Go service is now the default Docker and Helm runtime. The Python implementation remains in-tree as a temporary reference and rollback path.
 
 ## Current State
-- Python remains the reference runtime.
-- A first Go core proxy implementation exists beside the Python runtime.
-- Go Kubernetes discovery is implemented behind the existing static proxy path.
+- Go is the default deployable runtime.
+- Python remains available as a reference/rollback runtime during the transition window.
+- Go core proxying, Kubernetes discovery, and token generation are implemented.
+- The root Dockerfile builds `/usr/local/bin/borg` and `/usr/local/bin/borg-genkey`.
+- The Helm chart deploys the Go runtime by default while preserving its values shape.
 - The devcontainer includes Go, Docker, KinD, kubectl, and Helm tooling.
 - In the current rootless/containerized WSL environment, Docker-in-Docker cannot start containers because cpuset cgroups are not writable; KinD validation needs host/outside-devcontainer Docker, Docker-outside-of-Docker, or CI/VM infrastructure.
 - Host/raw WSL KinD validation works with the node image pinned to Kubernetes v1.34.3.
@@ -20,12 +22,11 @@ The goal is to make the Go service easy to build, test, and compare without chan
   - `docs/migration/python-ops-contract.md`
 
 ## Layout Principles
-- Keep Python and Go side by side until final cutover.
+- Keep Python and Go side by side until the cleanup milestone removes or archives Python.
 - Keep Go application internals under `internal/` so they are not treated as a public library API.
 - Keep executable entrypoints under `cmd/`.
 - Keep shared test fixtures close to the Go packages that use them.
-- Do not move Python files during Milestone 2.
-- Do not switch Helm, Docker, or CI defaults to Go during Milestone 2.
+- Do not move or remove Python files during the hard cutover pass.
 - Prefer standard library packages unless a dependency removes real complexity.
 
 ## Target Tree
@@ -71,7 +72,7 @@ The first Go implementation should grow toward this shape:
 └── go.sum
 ```
 
-This tree is the side-by-side Go shape used during migration. It intentionally lives beside the Python runtime until the cutover pass switches deployment defaults.
+This tree is the Go runtime shape. It intentionally lives beside the Python runtime until the cleanup pass removes or archives Python.
 
 ## Entry Points
 ### `cmd/borg`
@@ -84,7 +85,9 @@ Responsibilities:
 - create the application through `internal/app`
 - start the HTTP server
 
-During migration, build it as `bin/borg-go` to avoid confusion with the Python `borg` CLI:
+Production images install this command as `/usr/local/bin/borg`.
+
+During local migration testing, build it as `bin/borg-go` to avoid confusion with the Python `borg` CLI:
 
 ```bash
 go build -o bin/borg-go ./cmd/borg
@@ -101,7 +104,9 @@ Responsibilities:
 - read ConfigMap defaults and auth Secret data using `client-go`
 - keep the Python utility available until final cutover
 
-During migration, build it as `bin/borg-genkey`:
+Production images install this command as `/usr/local/bin/borg-genkey`.
+
+During local testing, build it as `bin/borg-genkey`:
 
 ```bash
 go build -o bin/borg-genkey ./cmd/borg-genkey
@@ -207,7 +212,7 @@ Responsibilities:
 - resolve models from the configured annotation key before automodel fallback
 - query automodel via `GET <endpoint>/v1/models` with `Authorization: Bearer EMPTY`
 
-The first Go discovery pass uses polling only. Kubernetes watches/informers, health-check eviction, per-discovery upstream API keys, and Helm/Docker cutover remain later work.
+The current Go discovery implementation uses polling only. Kubernetes watches/informers, health-check eviction, and per-discovery upstream API keys remain later work.
 
 ### `internal/openai`
 Small OpenAI-compatible response/request structs.
@@ -265,7 +270,7 @@ scripts/validate-kind-go.sh --create-cluster --delete-cluster
 ```
 
 ## Build And Run Commands
-These commands are valid for the side-by-side Go implementation:
+These commands are valid for local Go development:
 
 ```bash
 go test ./...
@@ -274,28 +279,27 @@ go build -o bin/borg-genkey ./cmd/borg-genkey
 ./bin/borg-go --config config.yaml --port 8001
 ```
 
-Python remains available during the same phase:
+Python remains available as a rollback/reference runtime:
 
 ```bash
 uv run borg --config config.yaml --port 8000
 ```
 
 ## Files That Stay In Place
-Do not move or remove these before the cutover decision:
+Do not move or remove these before the cleanup milestone:
 
 - `src/borg/`
 - `tests/`
 - `pyproject.toml`
 - `uv.lock`
 - `genkey.py`
-- `Dockerfile`
 - `charts/borg/`
 - `config.example.yaml`
 
-Those files remain the Python reference and deployment fallback until the Go cutover is complete.
+Those Python files remain the reference and rollback path until the cleanup milestone. `Dockerfile` and `charts/borg/` now target the Go runtime by default.
 
-## Side-By-Side Baseline
-The side-by-side Go baseline is useful when:
+## Go Runtime Baseline
+The Go runtime baseline is useful when:
 
 - `go.mod` exists
 - `cmd/borg` builds into `bin/borg-go`

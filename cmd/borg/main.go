@@ -1,18 +1,31 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"log"
 	"net"
 	"net/http"
 	"os"
+	"os/signal"
 	"strconv"
+	"syscall"
 	"time"
 
 	"github.com/undy-io/BORG/internal/app"
 	"github.com/undy-io/BORG/internal/config"
 )
+
+const defaultShutdownTimeout = 30 * time.Second
+
+type serverRunner struct {
+	listenAndServe func() error
+	shutdown       func(context.Context) error
+	close          func() error
+	timeout        time.Duration
+}
 
 func main() {
 	var configPathFlag string
@@ -37,6 +50,9 @@ func main() {
 		log.Fatal(err)
 	}
 
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
 	port, err := config.ResolvePort(portFlag)
 	if err != nil {
 		log.Fatal(err)
@@ -57,7 +73,50 @@ func main() {
 	}
 
 	log.Printf("BORG Go proxy listening on %s", fmt.Sprintf("http://%s", addr))
-	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+	if err := runHTTPServer(ctx, serverRunner{
+		listenAndServe: server.ListenAndServe,
+		shutdown:       server.Shutdown,
+		close:          server.Close,
+		timeout:        defaultShutdownTimeout,
+	}); err != nil {
 		log.Fatal(err)
+	}
+}
+
+func runHTTPServer(ctx context.Context, runner serverRunner) error {
+	if runner.timeout <= 0 {
+		runner.timeout = defaultShutdownTimeout
+	}
+
+	serverErr := make(chan error, 1)
+	go func() {
+		serverErr <- runner.listenAndServe()
+	}()
+
+	select {
+	case err := <-serverErr:
+		if err != nil && !errors.Is(err, http.ErrServerClosed) {
+			return err
+		}
+		return nil
+	case <-ctx.Done():
+		log.Printf("BORG Go proxy shutting down")
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), runner.timeout)
+		defer cancel()
+
+		if err := runner.shutdown(shutdownCtx); err != nil {
+			log.Printf("BORG Go proxy graceful shutdown failed: %v", err)
+			if closeErr := runner.close(); closeErr != nil {
+				log.Printf("BORG Go proxy close failed: %v", closeErr)
+				return errors.Join(err, closeErr)
+			}
+			return err
+		}
+
+		err := <-serverErr
+		if err != nil && !errors.Is(err, http.ErrServerClosed) {
+			return err
+		}
+		return nil
 	}
 }

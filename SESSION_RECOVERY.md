@@ -4,37 +4,34 @@ Use this file to resume the Go migration if chat history is lost.
 
 ## Current Branch State
 - Branch: `go-migration`
-- Latest committed baseline before this documentation pass: `10e5cb4 Kind validation script works`
-- Expected current uncommitted work: documentation refresh for the completed KinD Go validation milestone
+- Latest committed baseline before this cutover pass: `10e5cb4 Kind validation script works`
+- Current uncommitted work: hard Go runtime cutover
 - Unrelated local file: `.codex`
-- Python runtime status: still the reference runtime, deployment fallback, and parity oracle
-- Go runtime status: implemented beside Python for static proxying, auth, streaming, Kubernetes discovery, and token generation
-- Deployment default status: Helm, Docker, CI, and release defaults are still Python-first until the cutover pass
+- Default deployable runtime: Go BORG
+- Python runtime status: retained in-tree as the reference/rollback path
+- Deployment default status: root Docker image, Helm chart image path, and Go CI now target the Go runtime
+- Review fix status: non-root image hardening is deferred for port compatibility, and Go BORG has graceful SIGTERM/SIGINT shutdown.
 
-Current uncommitted documentation slice:
+Current uncommitted cutover slice:
+- `Dockerfile`
+- `.dockerignore`
+- `.gitignore`
+- `.github/workflows/go.yml`
+- `.github/workflows/docker.yml`
+- `cmd/borg/main.go`
+- `cmd/borg/main_test.go`
+- `charts/borg/values.yaml`
 - `README.md`
-- `MILESTONE.md`
 - `ROADMAP.md`
+- `MILESTONE.md`
 - `SESSION_RECOVERY.md`
 - `docs/migration/go-project-layout.md`
-- `docs/migration/go-k8s-smoke-test-harness.md`
 - `docs/migration/kind-go-validation-harness.md`
-- `dummy-openai/README.md`
-
-If resuming before this documentation pass is committed, stage the docs with:
-
-```bash
-git add README.md MILESTONE.md ROADMAP.md SESSION_RECOVERY.md \
-  docs/migration/go-project-layout.md \
-  docs/migration/go-k8s-smoke-test-harness.md \
-  docs/migration/kind-go-validation-harness.md \
-  dummy-openai/README.md
-```
 
 Do not stage `.codex`; it is unrelated local state.
 
 ## Current Validation State
-Latest known green checks:
+Latest known green baseline before this cutover:
 
 ```bash
 uv run pytest -q
@@ -45,36 +42,69 @@ go vet ./...
 go test -bench Streaming ./internal/proxy
 go build -o bin/borg-go ./cmd/borg
 go build -o bin/borg-genkey ./cmd/borg-genkey
+scripts/validate-kind-go.sh --create-cluster --delete-cluster
 ```
 
-Latest documentation-pass checks:
+Required cutover validation before commit:
 
 ```bash
+go test ./...
+go vet ./...
+go build -o bin/borg-go ./cmd/borg
+go build -o bin/borg-genkey ./cmd/borg-genkey
+uv run pytest -q
+uv run pytest -q tests/smoke
+uv run pytest -q tests/k8s_smoke
+docker build -t borg-go:cutover .
+helm lint ./charts/borg
+helm template borg ./charts/borg --debug
 git diff --check
-bash -n scripts/validate-kind-go.sh
 ```
 
-The repeatable host/raw WSL KinD validation also passed:
+Cutover validation already run in the devcontainer:
+- `go test ./...` passed.
+- `go vet ./...` passed.
+- `go build -o bin/borg-go ./cmd/borg` passed.
+- `go build -o bin/borg-genkey ./cmd/borg-genkey` passed.
+- `go build ./cmd/borg` passed.
+- `go build ./cmd/borg-genkey` passed.
+- `go test ./cmd/borg` passed with graceful shutdown coverage.
+- `uv run pytest -q` passed with `61 passed`.
+- `uv run pytest -q tests/smoke` passed with `14 passed` when rerun outside the sandbox. The sandboxed run hit the known localhost readiness issue.
+- `uv run pytest -q tests/k8s_smoke` passed with `5 passed`.
+- `helm lint ./charts/borg` passed.
+- `helm template borg ./charts/borg --debug` passed.
+- `git diff --check` passed.
+
+Cutover validation still needed from raw WSL/host:
+- `docker build -t borg-go:cutover .`
+- `scripts/validate-kind-go.sh --create-cluster --delete-cluster`
+
+The devcontainer Docker build reached `RUN go mod download`, then failed with the known nested Docker cgroup error:
+
+```text
+unable to apply cgroup configuration: mkdir /sys/fs/cgroup/cpuset/docker/...: permission denied
+```
+
+Required host/raw WSL validation before calling the cutover fully proven:
 
 ```bash
 scripts/validate-kind-go.sh --create-cluster --delete-cluster
 ```
 
-That run completed:
-- KinD cluster creation with the pinned Kubernetes v1.34.3 node image
-- Go binary build
-- `borg-go:kind` image build from the local binary
-- `dummy-openai:kind` image build
-- image load into KinD
-- dummy backend Helm deploy
-- Go BORG Helm deploy
-- root route validation
-- discovered `/v1/models` validation
-- missing-auth `401` validation
-- authenticated POST forwarding validation
-- upstream auth rewrite validation to `Bearer EMPTY`
-- SSE streaming validation
-- KinD cluster deletion
+## Cutover Decisions
+- Production image binary name is `/usr/local/bin/borg`.
+- Local migration binary name remains `bin/borg-go`.
+- The production image also includes `/usr/local/bin/borg-genkey`.
+- The Docker image command is `/usr/local/bin/borg --host 0.0.0.0`.
+- The Docker image intentionally runs as root for this cutover to preserve compatibility with low `service.targetPort` values.
+- Non-root hardening is deferred until the chart has explicit `securityContext` and port/capability support.
+- `/app/config.yaml` remains the default container config path and Helm mount target.
+- Helm values shape remains stable; no Python/Go runtime selector is added.
+- `authKeySecret.key` remains `BORG_AUTH_KEY` for Secret compatibility.
+- The Deployment still maps the auth Secret key into runtime env var `AUTH_KEY`.
+- Python source, tests, package metadata, and `genkey.py` are not removed in this pass.
+- The Go service handles `SIGTERM` and `SIGINT` with graceful `server.Shutdown`, then falls back to `server.Close` on shutdown failure.
 
 ## Important Environment Note
 Docker-in-Docker KinD inside the devcontainer is blocked in the current rootless/containerized WSL environment.
@@ -82,7 +112,6 @@ Docker-in-Docker KinD inside the devcontainer is blocked in the current rootless
 Observed failure:
 - nested Docker cannot create `/sys/fs/cgroup/cpuset/docker`
 - `docker info` reports cgroup v1
-- `/sys/fs/cgroup/cpuset` is not writable in a way nested Docker can use
 - direct `docker run --rm kindest/node:... true` fails with the same cgroup error
 
 Use raw WSL/host KinD for real cluster validation. The pinned node image is:
@@ -90,55 +119,6 @@ Use raw WSL/host KinD for real cluster validation. The pinned node image is:
 ```text
 kindest/node:v1.34.3@sha256:08497ee19eace7b4b5348db5c6a1591d7752b164530a36f855cb0f2bdcbadd48
 ```
-
-## Migration Decisions
-- Keep Python and Go side by side until cutover.
-- Preserve Python behavior unless an accepted Go delta is documented.
-- Use URL-safe printable auth keys as the normalized auth-key representation.
-- Keep request bodies buffered in memory for current Python parity.
-- Use standard `net/http` and a custom Go proxy, not `httputil.ReverseProxy`.
-- Use `client-go` for Kubernetes discovery.
-- Use polling discovery for this phase; watches/informers remain out of scope.
-- Treat failed discovery passes as non-authoritative and preserve the last successful discovered snapshot.
-- After green KinD validation, a hard cutover to Go is acceptable because BORG is not deployed anywhere yet.
-
-## Implemented Go Layout
-Primary Go service:
-- `cmd/borg`
-- `internal/app`
-- `internal/auth`
-- `internal/config`
-- `internal/discovery`
-- `internal/discovery/k8s`
-- `internal/httpapi`
-- `internal/openai`
-- `internal/proxy`
-
-Go token utility:
-- `cmd/borg-genkey`
-
-Validation and helper paths:
-- `tests/smoke/test_local_parity.py`
-- `tests/k8s_smoke/test_go_k8s_discovery.py`
-- `scripts/validate-kind-go.sh`
-- `dummy-openai/`
-
-During migration:
-- build the service as `bin/borg-go`
-- build the token utility as `bin/borg-genkey`
-- keep Python `genkey.py` available
-
-## Documentation Map
-- `README.md`: user-facing status, commands, and migration document index
-- `ROADMAP.md`: high-level migration sequencing
-- `MILESTONE.md`: current milestone state and remaining work
-- `docs/migration/python-runtime-contract.md`: frozen Python runtime/config/auth contract
-- `docs/migration/python-http-contract.md`: frozen Python HTTP/proxy contract
-- `docs/migration/python-ops-contract.md`: frozen Python discovery/Helm/ops contract
-- `docs/migration/go-project-layout.md`: side-by-side Go package layout
-- `docs/migration/local-smoke-test-harness.md`: Python-vs-Go static proxy smoke suite
-- `docs/migration/go-k8s-smoke-test-harness.md`: fake Kubernetes API discovery smoke suite
-- `docs/migration/kind-go-validation-harness.md`: real KinD Go validation harness
 
 ## Current Go Capability Summary
 Core proxy:
@@ -172,46 +152,24 @@ Token utility:
 - supports printable URL-safe auth key text and legacy raw 32-byte Secret data
 - mints AES-256-GCM bearer tokens using plaintext `auth_prefix + username`
 
-## Known Accepted Deltas
-- Go auth keys are normalized to URL-safe printable base64.
-- Go non-streaming forwarding does not forward client `Accept-Encoding`; Go may negotiate upstream gzip and return decoded downstream bytes.
-- Go streaming forwarding forces upstream `Accept-Encoding: identity` to protect SSE latency.
-- Go backend API key precedence is `apikeyEnv` value, inline `apikey`, `API_KEY`, then `EMPTY`.
+## Documentation Map
+- `README.md`: user-facing status, commands, token generation, and validation
+- `ROADMAP.md`: high-level migration sequencing
+- `MILESTONE.md`: current cutover milestone state and validation
+- `docs/migration/python-runtime-contract.md`: frozen Python runtime/config/auth contract
+- `docs/migration/python-http-contract.md`: frozen Python HTTP/proxy contract
+- `docs/migration/python-ops-contract.md`: frozen Python discovery/Helm/ops contract
+- `docs/migration/go-project-layout.md`: Go package and runtime layout
+- `docs/migration/local-smoke-test-harness.md`: Python-vs-Go static proxy smoke suite
+- `docs/migration/go-k8s-smoke-test-harness.md`: fake Kubernetes API discovery smoke suite
+- `docs/migration/kind-go-validation-harness.md`: real KinD Go validation harness
 
 ## Next Step
-The next implementation lane is the hard Go cutover.
+Finish validation for the hard Go cutover, then commit it.
 
-Concrete planning should cover:
-- switching Dockerfile/default image build to Go
-- switching Helm defaults to run Go BORG
-- preserving or documenting rollback to Python during transition
-- adding CI/release validation for the Go runtime
-- deciding whether `borg-genkey` replaces `genkey.py` in docs and packaging
-- keeping these gates green:
-  - `go test ./...`
-  - `uv run pytest -q`
-  - `uv run pytest -q tests/smoke`
-  - `uv run pytest -q tests/k8s_smoke`
-  - `scripts/validate-kind-go.sh --create-cluster --delete-cluster`
-
-## Useful Commands
-```bash
-uv run pytest -q
-uv run ruff check .
-uv run ruff format --check .
-go version
-go test ./...
-go vet ./...
-go test -bench Streaming ./internal/proxy
-go build -o bin/borg-go ./cmd/borg
-go build -o bin/borg-genkey ./cmd/borg-genkey
-uv run pytest -q tests/smoke
-uv run pytest -q tests/k8s_smoke
-bash -n scripts/validate-kind-go.sh
-scripts/validate-kind-go.sh
-scripts/validate-kind-go.sh --create-cluster --delete-cluster
-docker version
-kind version
-kubectl version --client
-helm version
-```
+After the cutover is committed and KinD remains green, plan the cleanup milestone:
+- remove or archive Python runtime code
+- remove or archive `genkey.py`
+- simplify README and migration docs for a normal Go-first project
+- simplify the devcontainer from dual-runtime migration mode
+- decide whether Python contract docs stay as history or move under an archive

@@ -1,302 +1,128 @@
-# Milestone 2: Go Core Proxy And Kubernetes Discovery
+# Milestone 3: Hard Go Runtime Cutover
 
 ## Status Snapshot
-- Milestone 2 is functionally complete.
-- Previous milestone: Milestone 1, "Freeze The Python Contract", complete.
-- Current reference implementation remains Python.
-- First Go core proxy implementation has been added beside Python.
-- Review hardening completed for compression/header behavior and backend API key precedence.
-- Go Kubernetes discovery has been added behind the existing static proxy path.
-- Fake Kubernetes API smoke validation has been added for the Go discovery path.
-- Go `borg-genkey` has been added beside Python `genkey.py`.
-- Host WSL KinD validation is available with a pinned Kubernetes v1.34.3 node image.
-- Manual KinD deployment validation has proven the Go BORG service discovers the annotated dummy backend in a real cluster.
-- A repeatable host/WSL KinD Go validation harness has been added and validated.
-- Documentation now includes the Go layout, static smoke harness, fake Kubernetes smoke harness, and real KinD validation harness.
-- Docker-in-Docker KinD inside the devcontainer is blocked in the current rootless/containerized WSL environment.
-- Helm, Docker, CI defaults, and the Python runtime are unchanged.
-- Verified:
-  - `go test ./...`
-  - `go vet ./...`
-  - `go test -bench Streaming ./internal/proxy`
-  - `go build -o bin/borg-go ./cmd/borg`
-  - `go build -o bin/borg-genkey ./cmd/borg-genkey`
-  - `uv run pytest -q tests/smoke`
-  - `uv run pytest -q tests/k8s_smoke`
-  - `uv run pytest -q`
+- Previous milestone: Go core proxy, Kubernetes discovery, token generation, and KinD validation are complete.
+- Current milestone: switch default Docker, Helm, and CI/release validation to the Go runtime.
+- Python source, Python tests, `genkey.py`, and Python package metadata remain in-tree as the reference/rollback path.
+- The root Docker image now targets Go BORG by default; host Docker build validation is still pending because the devcontainer cannot run nested Docker build steps.
+- The Helm chart continues to use the same values, env vars, config mount path, service port, and probes.
+- The Go service now handles `SIGTERM`/`SIGINT` with graceful HTTP shutdown before app discovery cleanup.
+- Go CI has been added while Python CI remains active.
+- Docker-in-Docker KinD inside the devcontainer remains blocked by the current cgroup environment; run real KinD validation from raw WSL/host.
 
 ## Objective
-Introduce a useful Go implementation beside the Python runtime without changing the production deployment path.
+Make Go the default deployable BORG runtime without removing the Python fallback.
 
-The Go service now covers static config loading, auth-compatible POST routing, model registry behavior, `/v1/models`, non-streaming forwarding, streaming forwarding, and Kubernetes pod discovery. Python remains the parity oracle and rollback path.
-
-Local side-by-side smoke validation now runs without Kubernetes.
+The cutover should change the implementation behind the existing operational interface, not the interface itself. Existing Helm users should continue to configure image, auth Secret, API-key Secrets, runtime config, and service ports the same way.
 
 ## Scope
 In scope:
-- Go module setup
-- Go package layout
-- Python-compatible CLI flags
-- Static config loading
-- Auth key/token validation
-- Static backend registration
-- `/`, `/v1/models`, and POST `/v1/*` routing
-- Non-streaming and streaming request forwarding
-- Kubernetes discovery through configured `k8s_discover` selectors
-- Authoritative successful discovery reconciliation
-- Failed-pass discovery snapshot preservation
-- Go token generation utility
-- Host WSL Docker/KinD/kubectl validation setup
-- Repeatable host/WSL KinD Go validation harness
-- Local Go tests, benchmark, and build command
-- Keeping Python tests green
+- Root Dockerfile uses Go multi-stage build.
+- Production container exposes `/usr/local/bin/borg`.
+- Production container includes `/usr/local/bin/borg-genkey`.
+- Default container command runs Go BORG with `--host 0.0.0.0`.
+- Go BORG handles Kubernetes termination signals gracefully.
+- `/app/config.yaml` remains the default config path and Helm mount target.
+- Helm values schema and value names remain stable.
+- Go CI is added.
+- Python CI remains active.
+- README, roadmap, and recovery docs reflect the Go default runtime.
 
 Out of scope:
-- Replacing the Python runtime
-- Switching Helm or Docker defaults to Go
-- Kubernetes watch/informer implementation
-- Per-discovery upstream API keys
-- Health-check eviction
-- CI/release cutover
-- Removing or moving Python files
-
-## Implemented Layout
-```text
-cmd/borg/
-cmd/borg-genkey/
-internal/app/
-internal/auth/
-internal/config/
-internal/discovery/
-internal/discovery/k8s/
-internal/httpapi/
-internal/openai/
-internal/proxy/
-scripts/validate-kind-go.sh
-go.mod
-go.sum
-```
-
-During migration, build the service as `bin/borg-go` to avoid confusion with the Python `borg` CLI.
-Build the Go token utility as `bin/borg-genkey` while Python `genkey.py` remains available.
+- Removing Python source, tests, package metadata, or `genkey.py`.
+- Adding a Helm runtime selector.
+- Changing auth Secret key defaults.
+- Changing discovery semantics or proxy behavior.
+- Moving KinD validation into CI.
 
 ## Checkpoints
 
-### Checkpoint 1: Module And Tooling
+### Checkpoint 1: Container Runtime
 Tasks:
-- [x] Add `go.mod` and `go.sum`.
-- [x] Add the initial Go package layout.
-- [x] Add local commands:
-  - `go test ./...`
-  - `go build -o bin/borg-go ./cmd/borg`
-- [x] Add `bin/` to `.gitignore`.
+- [x] Replace the Python root Dockerfile with a Go multi-stage Dockerfile.
+- [x] Build `./cmd/borg` as `/usr/local/bin/borg`.
+- [x] Build `./cmd/borg-genkey` as `/usr/local/bin/borg-genkey`.
+- [x] Keep `/app/config.yaml` in the image as the default config path.
+- [x] Run the default container command as `/usr/local/bin/borg --host 0.0.0.0`.
+- [x] Add `.dockerignore` so Docker builds do not send local caches, virtualenvs, or build artifacts.
+- [x] Leave `entrypoint.sh` in place for the Python rollback path, but remove it from the default image flow.
+- [x] Run the container as root for this cutover to preserve low `service.targetPort` compatibility.
 
 Validation:
-- [x] `go test ./...` passes.
-- [x] `go build -o bin/borg-go ./cmd/borg` succeeds.
-- [x] `uv run pytest -q` still passes.
-
-### Checkpoint 2: Config And CLI
-Tasks:
-- [x] Implement `--config` and `-c`, defaulting to `PROXY_CONFIG`, then `config.yaml`.
-- [x] Implement `--host`, defaulting to `0.0.0.0`.
-- [x] Implement `--port`, defaulting to `PORT`, then `8000`.
-- [x] Accept `--reload` as a no-op compatibility flag.
-- [x] Parse YAML and JSON config files.
-- [x] Preserve the top-level `borg` config shape.
-- [x] Implement auth and backend API key precedence.
-
-Validation:
-- [x] Go config tests cover path, port, YAML/JSON parsing, auth key precedence, and backend API key precedence.
-
-### Checkpoint 3: HTTP And Proxy Parity
-Tasks:
-- [x] Implement `GET /`.
-- [x] Implement `GET /v1/models`.
-- [x] Implement POST `/v1/*`.
-- [x] Implement auth enforcement only for POST proxy routes.
-- [x] Implement invalid JSON, non-object JSON, missing model, and unknown model errors.
-- [x] Implement model registry listing and round-robin endpoint selection.
-- [x] Implement non-streaming forwarding with upstream auth rewrite.
-- [x] Implement streaming forwarding with chunk flushing and downstream cancellation propagation.
-- [x] Harden compression behavior:
-  - non-streaming uses Go transport-managed upstream compression and decoded downstream responses
-  - streaming forces upstream `Accept-Encoding: identity` for SSE latency predictability
-- [x] Strip static hop-by-hop headers and headers named by `Connection` in both proxy directions.
-- [x] Correct Go backend API key precedence to `apikeyEnv` value, inline `apikey`, `API_KEY`, then `EMPTY`.
-
-Validation:
-- [x] Go HTTP tests cover root, models, body validation, auth errors, valid auth, non-stream forwarding, streaming by body flag, streaming by Accept header, and downstream cancellation.
-- [x] Go proxy benchmark records streaming throughput and allocations.
-- [x] Go proxy tests cover compression mode, decoded non-streaming gzip responses, streaming identity, request hop-by-hop stripping, and response hop-by-hop stripping.
-- [x] Go config tests cover env API keys, inline API keys, env-missing inline fallback, `API_KEY` fallback, and `EMPTY` fallback.
-
-### Checkpoint 4: Documentation And Handoff
-Tasks:
-- [x] Add the Go project layout overview.
-- [x] Update `README.md` with migration status and Go commands.
-- [x] Update `ROADMAP.md` with current status.
-- [x] Update `SESSION_RECOVERY.md` for the first Go core proxy implementation.
-- [x] Document the planned local smoke/parity harness for Kubernetes-free validation.
-- [x] Implement the local smoke/parity harness under `tests/smoke`.
-
-Validation:
-- [x] A future session can resume from `SESSION_RECOVERY.md` and know the next code task.
-- [x] `uv run pytest -q tests/smoke` passes with real Python and Go proxy subprocesses.
-
-### Checkpoint 5: Kubernetes Discovery
-Tasks:
-- [x] Add shared discovery endpoint, discoverer, registry, and reconciler types.
-- [x] Preserve the last successful discovered snapshot across failed refresh passes.
-- [x] Add Kubernetes discovery using `client-go`.
-- [x] Load Kubernetes config from in-cluster config, then kubeconfig defaults.
-- [x] List pods by configured namespace and selector.
-- [x] Skip non-running pods, pods without annotations, pods without pod IPs, and pods with no resolved models.
-- [x] Build endpoint URLs from pod IP plus `borg/protocol`, `borg/apiport`, and `borg/apibase` annotations.
-- [x] Resolve models from configured `modelkey` annotation before automodel lookup.
-- [x] Query automodel via `GET <endpoint>/v1/models` with `Authorization: Bearer EMPTY`.
-- [x] Start discovery only when `update_interval > 0` and `k8s_discover` is non-empty.
-- [x] Log discovery initialization failures and continue serving static config.
-- [x] Run one update immediately, then poll every `update_interval` seconds.
-- [x] Add `App.Close()` and close background discovery from `cmd/borg`.
-
-Validation:
-- [x] Shared reconciler tests cover initial add, authoritative removal, model-specific add/remove, and failed-pass preservation.
-- [x] Kubernetes discovery tests cover pod eligibility, defaults, annotation overrides, model parsing, automodel success/failure, and list errors.
-- [x] App wiring tests cover discovery gating, init failure fallback, discovered model registration, and clean shutdown.
-
-### Checkpoint 6: Local Kubernetes Discovery Smoke
-Tasks:
-- [x] Add a fake Kubernetes API server smoke harness under `tests/k8s_smoke`.
-- [x] Run the real `bin/borg-go` process with a temporary kubeconfig pointed at the fake API.
-- [x] Start local OpenAI-compatible dummy upstreams for discovered endpoint traffic.
-- [x] Cover annotation discovery and namespace/selector request shape.
-- [x] Cover automodel discovery through `/v1/models`.
-- [x] Cover successful reconciliation removal after pods disappear.
-- [x] Cover failed Kubernetes list preservation of the last successful snapshot.
-- [x] Cover endpoint annotation overrides during forwarding.
-
-Validation:
-- [x] `go build -o bin/borg-go ./cmd/borg`
-- [x] `uv run pytest -q tests/k8s_smoke`
-
-### Checkpoint 7: Go Token Utility
-Tasks:
-- [x] Add `cmd/borg-genkey` as a Go replacement for `genkey.py`.
-- [x] Preserve Kubernetes CLI flags: username, namespace, release, key-name, auth-prefix, secret suffix, and configmap suffix.
-- [x] Load local kubeconfig using default client-go loading rules.
-- [x] Read ConfigMap defaults from `<release>-config` `config.yaml`.
-- [x] Read auth key data from `<release>-auth`.
-- [x] Preserve support for migrated printable URL-safe auth key text and legacy raw 32-byte Secret data.
-- [x] Mint AES-256-GCM tokens with plaintext `auth_prefix + username`.
-- [x] Keep Python `genkey.py` in place during migration.
-
-Validation:
-- [x] Go tests cover ConfigMap defaults, CLI overrides, default prefix, first Secret key fallback, missing Secret keys, Secret data formats, and token validation.
-- [x] `go build -o bin/borg-genkey ./cmd/borg-genkey`
-
-### Checkpoint 8: Devcontainer KinD Enablement
-Tasks:
-- [x] Add Docker-in-Docker to the devcontainer so KinD can create node containers inside the development environment.
-- [x] Add kubectl and Helm tooling through the devcontainer Kubernetes feature, with Minikube disabled.
-- [x] Make the app service explicitly privileged in `.devcontainer/docker-compose.yml`.
-- [x] Give the app service host cgroup namespace access for nested Docker/KinD.
-- [x] Mount `/sys/fs/cgroup` read-write into the app service for nested Docker cgroup creation.
-- [x] Install KinD during post-create with `go install sigs.k8s.io/kind@v0.31.0`.
-- [x] Rebuild/restart the devcontainer.
-
-Validation:
-- [x] `jq . .devcontainer/devcontainer.json`
-- [x] `bash -n .devcontainer/post-create.sh`
-- [x] `UV_CACHE_DIR=/tmp/uv-cache uv run python -c "import pathlib, yaml; yaml.safe_load(pathlib.Path('.devcontainer/docker-compose.yml').read_text()); print('ok')"`
-- [x] `docker version`
-- [x] `kind version`
-- [x] `kubectl version --client`
+- [ ] `docker build -t borg-go:cutover .`
 
 Notes:
-- First rebuild installed the tooling, but `kind create cluster` failed because the nested Docker daemon could not create `/sys/fs/cgroup/cpuset/docker`.
-- A second rebuild with host cgroup namespace and `/sys/fs/cgroup` mounted read-write failed the same way.
-- Direct `docker run --rm kindest/node:... true` also fails, so the nested Docker daemon cannot run containers in this environment.
-- `docker info` reports cgroup v1, and `/sys/fs/cgroup/cpuset` is not writable by root inside the devcontainer.
-- Treat in-devcontainer Docker-in-Docker KinD as blocked; use host/outside-devcontainer KinD, Docker-outside-of-Docker, or CI/VM-based KinD validation next.
+- Docker build cannot complete inside the current devcontainer because nested Docker cannot create cpuset cgroups during `RUN` steps. The Dockerfile reached `RUN go mod download` before hitting the known environment error. Run this validation from raw WSL/host.
+- Non-root runtime hardening is deferred to a follow-up that can add chart-level `securityContext` and port/capability policy.
 
-### Checkpoint 9: Host WSL KinD Baseline
+### Checkpoint 2: Go Runtime Shutdown
 Tasks:
-- [x] Create a KinD cluster from raw WSL instead of inside the devcontainer.
-- [x] Pin the KinD node image below Kubernetes v1.35 because this WSL/Docker runtime still reports cgroup v1.
-- [x] Confirm the control-plane node reaches `Ready`.
-- [x] Confirm core system pods reach `Running`.
-- [x] Load and deploy the dummy OpenAI backend.
-- [x] Build, load, and deploy a temporary Go BORG image.
-- [x] Confirm `GET /` succeeds through a port-forwarded BORG Service.
-- [x] Confirm `GET /v1/models` includes the discovered dummy model.
+- [x] Handle `SIGTERM` and `SIGINT` with `signal.NotifyContext`.
+- [x] Run `ListenAndServe` in a goroutine and wait for either server exit or cancellation.
+- [x] Use `server.Shutdown` with a `30s` timeout on signal.
+- [x] Fall back to `server.Close` if graceful shutdown fails.
+- [x] Treat `http.ErrServerClosed` as a clean exit.
+- [x] Keep `App.Close()` deferred so discovery stops after HTTP shutdown.
 
 Validation:
-- [x] `kind create cluster --name borg --config kind-config.yaml --image kindest/node:v1.34.3@sha256:08497ee19eace7b4b5348db5c6a1591d7752b164530a36f855cb0f2bdcbadd48`
-- [x] `kubectl wait --for=condition=Ready node/borg-control-plane --timeout=120s`
-- [x] `kubectl get nodes`
-- [x] `kubectl get pods -A`
-- [x] `docker build -t dummy-openai:kind ./dummy-openai`
-- [x] `kind load docker-image dummy-openai:kind --name borg`
-- [x] `helm upgrade --install dummy-openai ./dummy-openai/charts/dummy-openai -n vllm-services --set image.repository=dummy-openai --set image.tag=kind --set image.pullPolicy=IfNotPresent`
-- [x] `docker build -t borg-go:kind ...`
-- [x] `kind load docker-image borg-go:kind --name borg`
-- [x] `helm upgrade --install borg ./charts/borg -n borg ...`
-- [x] `kubectl -n borg port-forward svc/borg-borg 18080:80`
-- [x] `curl -fsS http://127.0.0.1:18080/`
-- [x] `curl -fsS http://127.0.0.1:18080/v1/models`
+- [x] `go test ./cmd/borg`
+- [x] Tests cover listen errors, clean `http.ErrServerClosed`, context cancellation, and close fallback after shutdown failure.
 
-Notes:
-- `kind v0.31.0` defaults to Kubernetes v1.35.0, which fails on this cgroup v1 runtime with kubelet health errors.
-- The pinned `kindest/node:v1.34.3` image successfully creates a usable local cluster.
-- Temporary Go image builds may need `docker build --network=host` or a prebuilt local binary image if `go mod download` times out inside Docker.
-- Manual validation covered BORG startup, Kubernetes discovery, Service access, and `/v1/models`; the repeatable harness in Checkpoint 10 now extends that coverage to authenticated POST forwarding and streaming.
-
-### Checkpoint 10: Repeatable KinD Go Validation Harness
+### Checkpoint 3: Helm Runtime
 Tasks:
-- [x] Add `scripts/validate-kind-go.sh` for host/WSL KinD validation.
-- [x] Default the script to the pinned Kubernetes v1.34.3 node image.
-- [x] Make cluster creation optional via `--create-cluster`.
-- [x] Permit cluster deletion only when the script created the cluster.
-- [x] Build Go binaries on the host and package `borg-go:kind` from the local binary.
-- [x] Build and load `dummy-openai:kind`.
-- [x] Deploy dummy backend and Go BORG through Helm.
-- [x] Generate an auth token with the built Go `borg-genkey`.
-- [x] Validate root, discovered models, missing auth, authenticated POST forwarding, and SSE streaming.
-- [x] Print Kubernetes diagnostics on failure.
-- [x] Extend `dummy-openai` with POST `/v1/chat/completions` and deterministic SSE output.
+- [x] Keep existing Helm values stable.
+- [x] Keep Deployment env wiring for `PORT`, `PROXY_CONFIG`, `AUTH_KEY`, and per-instance `apikeyEnv` values.
+- [x] Keep the ConfigMap mounted at `/app/config.yaml`.
+- [x] Keep `authKeySecret.key` defaulted to `BORG_AUTH_KEY` for Secret compatibility.
+- [x] Add chart comments noting that the default image now runs Go BORG.
+- [x] Avoid adding a Python/Go runtime selector.
 
 Validation:
-- [x] `bash -n scripts/validate-kind-go.sh`
-- [x] `scripts/validate-kind-go.sh --help`
-- [x] `uv run ruff check dummy-openai/main.py`
+- [x] `helm lint ./charts/borg`
+- [x] `helm template borg ./charts/borg --debug`
+
+### Checkpoint 4: CI And Release
+Tasks:
+- [x] Add Go CI for tests, vet, and command builds.
+- [x] Keep Python CI active.
+- [x] Keep Docker publish workflow pointed at the root Dockerfile.
+- [x] Rename Docker workflow labels to clarify it builds the Go runtime image.
+- [x] Keep Helm CI unchanged except for compatibility with Go-default chart rendering.
+- [x] Ignore root-level `borg` and `borg-genkey` binaries produced by local `go build ./cmd/...` validation commands.
+
+Validation:
 - [x] `go test ./...`
+- [x] `go vet ./...`
+- [x] `go build ./cmd/borg`
+- [x] `go build ./cmd/borg-genkey`
+
+### Checkpoint 5: Documentation And Recovery
+Tasks:
+- [x] Update README to describe Go as the default runtime.
+- [x] Update README Docker, Helm, token generation, testing, and release sections.
+- [x] Update `ROADMAP.md` to mark the cutover milestone as active/completed.
+- [x] Update `SESSION_RECOVERY.md` with the new runtime default and next cleanup lane.
+- [x] Update Go migration docs so they no longer describe Docker/Helm cutover as future work.
+- [x] Keep Python removal explicitly out of scope.
+
+Validation:
+- [x] `git diff --check`
+
+### Checkpoint 6: End-To-End Validation
+Tasks:
+- [x] Keep Python tests green.
+- [x] Keep local Python-vs-Go smoke parity green.
+- [x] Keep fake Kubernetes discovery smoke green.
+- [ ] Keep real KinD validation green from raw WSL/host.
+
+Validation:
+- [x] `uv run pytest -q`
 - [x] `uv run pytest -q tests/smoke`
 - [x] `uv run pytest -q tests/k8s_smoke`
-- [x] `scripts/validate-kind-go.sh --create-cluster --delete-cluster`
-
-Notes:
-- The harness is intended to run from raw WSL/host, not inside the devcontainer.
-- The script leaves deployed resources in place by default for debugging; use `--cleanup-resources` to remove Helm releases and namespaces.
-- The localhost smoke suites needed to be rerun outside the Codex sandbox after the devcontainer rebuild because the sandboxed run timed out waiting for proxy readiness with empty logs.
-- The full lifecycle host WSL run passed: cluster create, image build/load, Helm deploy, root/models checks, missing-auth rejection, authenticated POST forwarding, SSE streaming, and cluster delete.
-
-### Checkpoint 11: Milestone Documentation Refresh
-Tasks:
-- [x] Update `README.md` with the current Go migration validation state.
-- [x] Add `docs/migration/kind-go-validation-harness.md`.
-- [x] Update `ROADMAP.md` to identify the Go cutover as the next milestone.
-- [x] Update `SESSION_RECOVERY.md` so a resumed session starts from the committed KinD harness baseline.
-- [x] Keep Docker, Helm, CI, and production default notes explicit.
-
-Validation:
-- [x] Documentation clearly separates local static smoke, fake Kubernetes smoke, and real KinD validation.
-- [x] Documentation identifies host/raw WSL as the supported place to run KinD validation in the current environment.
-- [x] Documentation identifies hard Go cutover planning as the next implementation lane.
+- [ ] `scripts/validate-kind-go.sh --create-cluster --delete-cluster`
 
 ## Remaining Work
-- Plan and implement the hard Go cutover.
-- Switch Docker and Helm defaults to Go.
-- Add CI/release validation for the Go runtime.
-- Decide when to remove or archive the Python runtime after the Go default is proven.
-- Keep static smoke, fake Kubernetes smoke, and KinD validation green through the cutover.
+- Run `docker build -t borg-go:cutover .` from raw WSL/host.
+- Run `scripts/validate-kind-go.sh --create-cluster --delete-cluster` from raw WSL/host.
+- Commit the cutover once host Docker and KinD validation are green.
+- After the Go-default runtime is proven, plan the cleanup milestone for Python removal/archive, devcontainer simplification, and final documentation cleanup.

@@ -1,7 +1,7 @@
 # KinD Go Validation Harness
 
 ## Purpose
-Validate the Go BORG runtime against a real local Kubernetes cluster before switching production defaults away from Python.
+Validate the Go BORG runtime against a real local Kubernetes cluster after Docker and Helm defaults switch to Go.
 
 The harness exercises the path that unit tests and fake API smoke tests cannot fully prove:
 - building the Go runtime

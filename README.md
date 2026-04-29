@@ -11,19 +11,19 @@
 
 ## Migration status
 
-BORG is being migrated from Python to Go with a side-by-side strategy.
+BORG now defaults to the Go runtime. The Python implementation remains in the repository as a reference and rollback path during the transition window.
 
-- The Python service in `src/borg/` remains the reference runtime and deployment fallback.
 - Milestone 1 froze the Python contract in `docs/migration/`.
-- Milestone 2 has a working Go core proxy, Kubernetes discovery, and Go `borg-genkey` implementation without changing production defaults.
+- Milestone 2 added the Go core proxy, Kubernetes discovery, and Go `borg-genkey`.
+- The cutover pass switched the root Docker image, Helm chart default image path, and CI/release validation toward Go.
+- The Python service in `src/borg/` and Python tests remain as the reference/rollback path until the cleanup milestone.
 - The Kubernetes-free local smoke/parity harness is implemented in `tests/smoke` and documented in `docs/migration/local-smoke-test-harness.md`.
 - The fake Kubernetes API smoke harness for Go discovery is implemented in `tests/k8s_smoke` and documented in `docs/migration/go-k8s-smoke-test-harness.md`.
 - The host/raw WSL KinD validation harness is implemented in `scripts/validate-kind-go.sh` and documented in `docs/migration/kind-go-validation-harness.md`.
 - Docker-in-Docker KinD inside the devcontainer is blocked in the current rootless/containerized WSL environment by non-writable cpuset cgroups; run real KinD validation from raw WSL/host for now.
-- Helm, Docker, CI defaults, and the default runtime are still Python-first until the cutover pass.
 - The planned Go layout is documented in `docs/migration/go-project-layout.md`.
 
-The Go binary is built as `bin/borg-go` during migration so it can run beside the Python `borg` CLI without ambiguity.
+The production container exposes the Go service as `/usr/local/bin/borg`. During local migration testing, build it as `bin/borg-go` so it can run beside the Python `borg` CLI without ambiguity.
 
 ---
 
@@ -35,21 +35,28 @@ The Go binary is built as `bin/borg-go` during migration so it can run beside th
 | **Multi‑backend fan‑out** | Routes any `/v1/*` call to the next healthy backend and returns the first success  |
 | **Model union**           | `GET /v1/models` merges all discovered models                                      |
 | **Pluggable auth**        | Optional AES‑256 request signing (`auth_key`) and token prefix validation (`auth_prefix`) |
-| **Lightweight**           | FastAPI + uvicorn on Python 3.12‑slim (< 40 MB image)                              |
+| **Lightweight**           | Go `net/http` runtime with a small multi-stage container image                     |
 | **Helm chart & CI**       | One‑line `helm upgrade` and GitHub Actions pipeline to GHCR                        |
 
 ---
 
 ## 🚀 Quick start
 
-### 1 – Run locally with uv
+### 1 – Run locally with Go
 
 ```bash
 git clone https://github.com/undy-io/BORG.git
 cd BORG
-uv sync --frozen
 cp config.example.yaml config.yaml
-uv run borg --reload
+go build -o bin/borg-go ./cmd/borg
+./bin/borg-go --config config.yaml
+```
+
+Python remains available as a rollback/reference path:
+
+```bash
+uv sync --frozen
+uv run borg --config config.yaml --reload
 ```
 
 ### 2 – Docker
@@ -77,7 +84,7 @@ helm upgrade --install borg charts/borg \
   --set image.tag=dev
 ```
 
-> Need a dummy backend? `helm install dummy-openai charts/dummy-openai` — Borg discovers it within seconds.
+> Need a dummy backend? `helm install dummy-openai dummy-openai/charts/dummy-openai` — BORG discovers it within seconds.
 
 ---
 
@@ -120,9 +127,22 @@ Key values
 | Parameter          | Description                                   | Default                |
 | ------------------ | --------------------------------------------- | ---------------------- |
 | `image.repository` | Image to run                                  | `ghcr.io/undy-io/borg` |
-| `ingress.enabled`  | Expose via Ingress‑NGINX                      | `false`                |
+| `ingress.enabled`  | Expose via Ingress‑NGINX                      | `true`                 |
 | `ingress.hosts`    | DNS names served                              | `[]`                   |
 | `config`           | Inline proxy config (overrides `config.yaml`) | `{}`                   |
+
+---
+
+## 🔐 Token generation
+
+Use the Go token utility for new installs:
+
+```bash
+go build -o bin/borg-genkey ./cmd/borg-genkey
+bin/borg-genkey <username> --namespace <namespace> --release <release>
+```
+
+`genkey.py` remains in the repository for legacy Python rollback workflows during the transition window.
 
 ---
 
@@ -145,6 +165,7 @@ uv run mypy src
 uv run ruff check .
 uv run ruff format --check .
 go test ./...
+go vet ./...
 bash -n scripts/validate-kind-go.sh
 ```
 
@@ -218,7 +239,8 @@ The smoke suite in `tests/k8s_smoke` runs the Go proxy against a fake Kubernetes
 ## 📦 Release workflow
 
 * Pushes and pull requests run Python CI from `.github/workflows/python.yml`.
-* Pushes to **master** build `:edge` and `:sha-<short>` images from `.github/workflows/docker.yml`.
+* Pushes and pull requests run Go CI from `.github/workflows/go.yml`.
+* Pushes to **master** build Go runtime `:edge` and `:sha-<short>` images from `.github/workflows/docker.yml`.
 * Tagging `vX.Y.Z` also produces `:latest`, `:X.Y`, and `:X.Y.Z` tags.
 
 ---
@@ -228,7 +250,7 @@ The smoke suite in `tests/k8s_smoke` runs the Go proxy against a fake Kubernetes
 1. Fork & clone
 2. `uv sync --frozen`
 3. Make changes, add tests
-4. Run `uv run pytest`, `uv run mypy src`, `uv run ruff check .`, and `uv run ruff format --check .`
+4. Run `go test ./...`, `go vet ./...`, `uv run pytest`, `uv run mypy src`, `uv run ruff check .`, and `uv run ruff format --check .`
 5. PR against **master**
 
 ---
