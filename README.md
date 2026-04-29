@@ -15,15 +15,13 @@ BORG is being migrated from Python to Go with a side-by-side strategy.
 
 - The Python service in `src/borg/` remains the reference runtime and deployment fallback.
 - Milestone 1 froze the Python contract in `docs/migration/`.
-- Milestone 2 has a first Go core proxy implementation and Go Kubernetes discovery without changing production defaults.
-- A Go `borg-genkey` replacement is available during migration as `bin/borg-genkey`.
-- The devcontainer has Docker/KinD/kubectl/Helm tooling, but Docker-in-Docker KinD is blocked in the current rootless/containerized WSL environment by non-writable cpuset cgroups.
-- Host/raw WSL KinD works when the node image is pinned to Kubernetes v1.34.3.
-- Manual raw WSL KinD validation has proven the Go BORG service can discover an annotated dummy backend and serve `/v1/models` from the cluster.
-- `scripts/validate-kind-go.sh` automates the host/raw WSL KinD Go validation loop.
-- The planned Go layout is documented in `docs/migration/go-project-layout.md`.
+- Milestone 2 has a working Go core proxy, Kubernetes discovery, and Go `borg-genkey` implementation without changing production defaults.
 - The Kubernetes-free local smoke/parity harness is implemented in `tests/smoke` and documented in `docs/migration/local-smoke-test-harness.md`.
 - The fake Kubernetes API smoke harness for Go discovery is implemented in `tests/k8s_smoke` and documented in `docs/migration/go-k8s-smoke-test-harness.md`.
+- The host/raw WSL KinD validation harness is implemented in `scripts/validate-kind-go.sh` and documented in `docs/migration/kind-go-validation-harness.md`.
+- Docker-in-Docker KinD inside the devcontainer is blocked in the current rootless/containerized WSL environment by non-writable cpuset cgroups; run real KinD validation from raw WSL/host for now.
+- Helm, Docker, CI defaults, and the default runtime are still Python-first until the cutover pass.
+- The planned Go layout is documented in `docs/migration/go-project-layout.md`.
 
 The Go binary is built as `bin/borg-go` during migration so it can run beside the Python `borg` CLI without ambiguity.
 
@@ -139,20 +137,27 @@ Key values
 
 ## 🧪 Testing
 
+Core local checks:
+
 ```bash
 uv run pytest -q
 uv run mypy src
 uv run ruff check .
 uv run ruff format --check .
 go test ./...
+bash -n scripts/validate-kind-go.sh
+```
+
+Go migration smoke checks:
+
+```bash
 go build -o bin/borg-go ./cmd/borg
 go build -o bin/borg-genkey ./cmd/borg-genkey
 uv run pytest -q tests/smoke
 uv run pytest -q tests/k8s_smoke
-bash -n scripts/validate-kind-go.sh
 ```
 
-On raw WSL/host, validate the Go BORG runtime against KinD with:
+On raw WSL/host, validate the Go BORG runtime against a real KinD cluster with:
 
 ```bash
 scripts/validate-kind-go.sh
@@ -169,6 +174,8 @@ The harness uses this pinned Kubernetes node image by default because this WSL r
 ```text
 kindest/node:v1.34.3@sha256:08497ee19eace7b4b5348db5c6a1591d7752b164530a36f855cb0f2bdcbadd48
 ```
+
+See `docs/migration/kind-go-validation-harness.md` for prerequisites, cleanup flags, and failure diagnostics.
 
 For manual KinD toolchain checks:
 
@@ -204,6 +211,7 @@ The smoke suite in `tests/k8s_smoke` runs the Go proxy against a fake Kubernetes
 | `docs/migration/go-project-layout.md` | Target side-by-side Go project layout |
 | `docs/migration/local-smoke-test-harness.md` | Local Python-vs-Go smoke/parity harness design |
 | `docs/migration/go-k8s-smoke-test-harness.md` | Local fake Kubernetes API smoke harness for Go discovery |
+| `docs/migration/kind-go-validation-harness.md` | Real KinD deployment validation for the Go runtime |
 
 ---
 

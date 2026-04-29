@@ -12,8 +12,8 @@ The goal is to make the Go service easy to build, test, and compare without chan
 - The devcontainer includes Go, Docker, KinD, kubectl, and Helm tooling.
 - In the current rootless/containerized WSL environment, Docker-in-Docker cannot start containers because cpuset cgroups are not writable; KinD validation needs host/outside-devcontainer Docker, Docker-outside-of-Docker, or CI/VM infrastructure.
 - Host/raw WSL KinD validation works with the node image pinned to Kubernetes v1.34.3.
-- Manual raw WSL KinD validation has proven Go BORG startup, Kubernetes discovery, Service access, and `/v1/models` against an annotated dummy backend.
 - `scripts/validate-kind-go.sh` automates host/raw WSL KinD validation for Go BORG discovery, authenticated POST forwarding, and streaming.
+- The full create/delete KinD harness path has passed from raw WSL.
 - The Python contract is frozen in:
   - `docs/migration/python-runtime-contract.md`
   - `docs/migration/python-http-contract.md`
@@ -71,7 +71,7 @@ The first Go implementation should grow toward this shape:
 └── go.sum
 ```
 
-This is a target, not a requirement to create every file in the first commit. Milestone 2 should add only enough files to establish the shape and run a minimal service.
+This tree is the side-by-side Go shape used during migration. It intentionally lives beside the Python runtime until the cutover pass switches deployment defaults.
 
 ## Entry Points
 ### `cmd/borg`
@@ -241,6 +241,7 @@ Parity tests can start small and grow:
 
 The Kubernetes-free local smoke/parity harness is implemented under `tests/smoke` and documented in `docs/migration/local-smoke-test-harness.md`.
 The fake Kubernetes API smoke harness is implemented under `tests/k8s_smoke` and documented in `docs/migration/go-k8s-smoke-test-harness.md`.
+The real KinD Go validation harness is implemented at `scripts/validate-kind-go.sh` and documented in `docs/migration/kind-go-validation-harness.md`.
 
 On a host/runtime with usable Docker cgroups, validate the local KinD toolchain with:
 
@@ -280,7 +281,7 @@ uv run borg --config config.yaml --port 8000
 ```
 
 ## Files That Stay In Place
-Do not move or remove these during Milestone 2:
+Do not move or remove these before the cutover decision:
 
 - `src/borg/`
 - `tests/`
@@ -291,9 +292,9 @@ Do not move or remove these during Milestone 2:
 - `charts/borg/`
 - `config.example.yaml`
 
-Those files remain the Python reference and deployment fallback until the cutover milestone.
+Those files remain the Python reference and deployment fallback until the Go cutover is complete.
 
-## Milestone 2 Baseline
+## Side-By-Side Baseline
 The side-by-side Go baseline is useful when:
 
 - `go.mod` exists
@@ -308,4 +309,5 @@ The side-by-side Go baseline is useful when:
 - `README.md`, `ROADMAP.md`, `MILESTONE.md`, and `SESSION_RECOVERY.md` describe the side-by-side workflow
 - `docs/migration/local-smoke-test-harness.md` describes how to validate the static proxy path locally without Kubernetes
 - `docs/migration/go-k8s-smoke-test-harness.md` describes how to validate Go discovery locally without a real cluster
+- `docs/migration/kind-go-validation-harness.md` describes how to validate the Go runtime in a real local KinD cluster
 - Python tests still pass

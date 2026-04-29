@@ -55,4 +55,4 @@ The suite skips with a clear message when `bin/borg-go` is missing.
 - Docker image validation
 - KinD or Minikube deployment validation
 
-Those belong to a later deployment validation pass after Go Helm/Docker wiring exists.
+Those belong to the real KinD validation harness in `docs/migration/kind-go-validation-harness.md`.

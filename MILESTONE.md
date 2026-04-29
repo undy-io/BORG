@@ -1,6 +1,7 @@
 # Milestone 2: Go Core Proxy And Kubernetes Discovery
 
 ## Status Snapshot
+- Milestone 2 is functionally complete.
 - Previous milestone: Milestone 1, "Freeze The Python Contract", complete.
 - Current reference implementation remains Python.
 - First Go core proxy implementation has been added beside Python.
@@ -11,6 +12,7 @@
 - Host WSL KinD validation is available with a pinned Kubernetes v1.34.3 node image.
 - Manual KinD deployment validation has proven the Go BORG service discovers the annotated dummy backend in a real cluster.
 - A repeatable host/WSL KinD Go validation harness has been added and validated.
+- Documentation now includes the Go layout, static smoke harness, fake Kubernetes smoke harness, and real KinD validation harness.
 - Docker-in-Docker KinD inside the devcontainer is blocked in the current rootless/containerized WSL environment.
 - Helm, Docker, CI defaults, and the Python runtime are unchanged.
 - Verified:
@@ -248,7 +250,7 @@ Notes:
 - `kind v0.31.0` defaults to Kubernetes v1.35.0, which fails on this cgroup v1 runtime with kubelet health errors.
 - The pinned `kindest/node:v1.34.3` image successfully creates a usable local cluster.
 - Temporary Go image builds may need `docker build --network=host` or a prebuilt local binary image if `go mod download` times out inside Docker.
-- The manual validation currently covers BORG startup, Kubernetes discovery, Service access, and `/v1/models`; POST forwarding and streaming need an enhanced dummy backend and automated harness.
+- Manual validation covered BORG startup, Kubernetes discovery, Service access, and `/v1/models`; the repeatable harness in Checkpoint 10 now extends that coverage to authenticated POST forwarding and streaming.
 
 ### Checkpoint 10: Repeatable KinD Go Validation Harness
 Tasks:
@@ -279,6 +281,22 @@ Notes:
 - The localhost smoke suites needed to be rerun outside the Codex sandbox after the devcontainer rebuild because the sandboxed run timed out waiting for proxy readiness with empty logs.
 - The full lifecycle host WSL run passed: cluster create, image build/load, Helm deploy, root/models checks, missing-auth rejection, authenticated POST forwarding, SSE streaming, and cluster delete.
 
+### Checkpoint 11: Milestone Documentation Refresh
+Tasks:
+- [x] Update `README.md` with the current Go migration validation state.
+- [x] Add `docs/migration/kind-go-validation-harness.md`.
+- [x] Update `ROADMAP.md` to identify the Go cutover as the next milestone.
+- [x] Update `SESSION_RECOVERY.md` so a resumed session starts from the committed KinD harness baseline.
+- [x] Keep Docker, Helm, CI, and production default notes explicit.
+
+Validation:
+- [x] Documentation clearly separates local static smoke, fake Kubernetes smoke, and real KinD validation.
+- [x] Documentation identifies host/raw WSL as the supported place to run KinD validation in the current environment.
+- [x] Documentation identifies hard Go cutover planning as the next implementation lane.
+
 ## Remaining Work
-- Switch Docker and Helm defaults to Go after KinD validation is green.
-- Keep static-path smoke validation green while discovery evolves.
+- Plan and implement the hard Go cutover.
+- Switch Docker and Helm defaults to Go.
+- Add CI/release validation for the Go runtime.
+- Decide when to remove or archive the Python runtime after the Go default is proven.
+- Keep static smoke, fake Kubernetes smoke, and KinD validation green through the cutover.
