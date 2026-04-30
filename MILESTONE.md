@@ -2,12 +2,12 @@
 
 ## Status Snapshot
 - Previous milestone: Go became the default Docker, Helm, and CI runtime.
-- Current milestone: remove the retired Python BORG runtime and keep only Python tooling that directly supports Go validation.
+- Current milestone: remove the retired Python BORG runtime and active Python/UV tooling.
 - The active service lives under `cmd/` and `internal/`.
 - The production image builds `/usr/local/bin/borg` and `/usr/local/bin/borg-genkey`.
 - The dedicated Python CI workflow has been removed.
-- The Python package build path, legacy `genkey.py`, Python runtime tests, and Python-vs-Go parity smoke suite have been removed.
-- The retained Python code is limited to the fake Kubernetes smoke harness.
+- The Python package build path, legacy `genkey.py`, Python runtime tests, Python-vs-Go parity smoke suite, UV tooling, and devcontainer Python setup have been removed.
+- The fake Kubernetes smoke harness is now Go-native and runs the real Go binary.
 - The `dummy-openai` validation backend has been replaced with a tiny Go service.
 - Host Docker build validation remains the only cutover gate that cannot be proven inside this devcontainer.
 
@@ -20,16 +20,16 @@ This cleanup removes rollback code from the active source tree. Historical Pytho
 In scope:
 - Remove `src/borg/`.
 - Remove legacy `genkey.py`.
-- Remove the Python package build path and Python runtime dependencies from `pyproject.toml` and `uv.lock`.
+- Remove the Python package build path, package manifest, and lockfile.
 - Remove Python runtime tests.
 - Remove the Python-vs-Go parity smoke suite under `tests/smoke`.
-- Keep `tests/k8s_smoke` as a Python-based harness for the Go binary.
+- Keep `tests/k8s_smoke` as a Go-native process-level harness for the Go binary.
 - Keep `dummy-openai/` as a Go test backend for KinD validation.
-- Add retained smoke validation to Go CI.
+- Remove Python/UV setup from the devcontainer.
+- Let Go CI cover smoke validation through `go test ./...`.
 - Update README, roadmap, and recovery docs to describe the Go-only runtime.
 
 Out of scope:
-- Porting the retained Python smoke harness to Go.
 - Moving historical Python contract docs into an archive.
 - Changing Helm values or discovery semantics.
 - Moving real KinD validation into CI.
@@ -47,15 +47,17 @@ Tasks:
 Validation:
 - [x] No active docs or CI reference the removed runtime paths.
 
-### Checkpoint 2: Retained Smoke Harness
+### Checkpoint 2: Go-Native Smoke Harness
 Tasks:
 - [x] Keep `tests/k8s_smoke`.
-- [x] Reduce `pyproject.toml` to smoke harness dependencies.
-- [x] Refresh `uv.lock`.
-- [x] Add a Go CI smoke job that builds `bin/borg-go` and runs `uv run pytest -q tests/k8s_smoke`.
+- [x] Port the fake Kubernetes smoke harness to Go.
+- [x] Build `./cmd/borg` once in `TestMain`.
+- [x] Delete the Python package manifest and lockfile.
+- [x] Remove Python/UV setup from the devcontainer.
+- [x] Remove the dedicated Go CI smoke job; `go test ./...` runs the smoke package.
 
 Validation:
-- [x] `uv run pytest -q tests/k8s_smoke`
+- [x] `go test ./tests/k8s_smoke`
 
 ### Checkpoint 3: Go Runtime Validation
 Tasks:
@@ -65,11 +67,17 @@ Tasks:
 
 Validation:
 - [x] `go test ./...`
+- [x] `go test ./tests/k8s_smoke`
 - [x] `go vet ./...`
 - [x] `go build ./cmd/borg`
 - [x] `go build ./cmd/borg-genkey`
+- [x] `go build -o /tmp/dummy-openai ./dummy-openai`
+- [x] `bash -n scripts/validate-kind-go.sh`
+- [x] `bash -n .devcontainer/post-create.sh`
 - [x] `helm lint ./charts/borg`
 - [x] `helm template borg ./charts/borg --debug`
+- [x] `helm lint ./dummy-openai/charts/dummy-openai`
+- [x] `helm template dummy-openai ./dummy-openai/charts/dummy-openai --debug`
 - [x] `git diff --check`
 
 ### Checkpoint 4: Host Validation
@@ -84,5 +92,4 @@ Validation:
 
 ## Remaining Work
 - Run `docker build -t borg-go:cutover .` from raw WSL/host or CI.
-- Consider a follow-up to port `tests/k8s_smoke` away from Python.
 - Simplify or archive the historical migration docs after the cleanup is merged.

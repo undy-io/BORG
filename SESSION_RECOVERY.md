@@ -4,26 +4,30 @@ Use this file to resume the Go migration if chat history is lost.
 
 ## Current Branch State
 - Branch: `go-migration`
-- Latest committed baseline: `e03e768 starting purge of the python code`
-- Current uncommitted work: replace the Python/FastAPI `dummy-openai` validation backend with a tiny Go service.
+- Latest committed baseline: `70dfe81 Replace dummy OpenAI backend with Go`
+- Current uncommitted work: replace the Python `tests/k8s_smoke` harness with Go smoke tests and remove active Python/UV tooling, including devcontainer setup.
 - Unrelated local file: `.codex`
 - Active runtime: Go BORG only
 - Removed runtime state: `src/borg/`, legacy `genkey.py`, `entrypoint.sh`, Python runtime tests, Python-vs-Go parity smoke tests, and dedicated Python CI are removed.
-- Retained Python state: `tests/k8s_smoke` remains as a validation helper for the Go runtime.
+- Active Python state: none. Historical Python migration docs remain under `docs/migration/python-*.md`.
+- Go smoke state: `tests/k8s_smoke` is a process-level Go validation helper for the Go runtime.
 - Go validation helpers: `dummy-openai/` is a tiny Go OpenAI-compatible test backend for KinD validation.
 - Deployment default status: root Docker image, Helm chart image path, and Go CI target the Go runtime.
 
-Current dummy replacement slice:
-- `dummy-openai/main.go`
-- `dummy-openai/main_test.go`
-- `dummy-openai/main.py`
-- `dummy-openai/Dockerfile`
-- `dummy-openai/README.md`
+Current smoke cutover slice:
+- Add `tests/k8s_smoke/k8s_smoke_test.go`
+- Delete the old Python smoke harness and root UV project files.
+- `.github/workflows/go.yml`
+- `.devcontainer/Dockerfile`
+- `.devcontainer/post-create.sh`
+- `.devcontainer/devcontainer.json`
 - `README.md`
 - `ROADMAP.md`
 - `MILESTONE.md`
 - `SESSION_RECOVERY.md`
 - `docs/migration/go-project-layout.md`
+- `docs/migration/go-k8s-smoke-test-harness.md`
+- `docs/migration/kind-go-validation-harness.md`
 
 Do not stage `.codex`; it is unrelated local state.
 
@@ -47,10 +51,7 @@ Cutover validation previously run in the devcontainer:
 - `helm template borg ./charts/borg --debug` passed.
 - `git diff --check` passed.
 
-Historical Python checks passed before removal:
-- `uv run pytest -q` passed with `61 passed`.
-- `uv run pytest -q tests/smoke` passed with `14 passed` when rerun outside the sandbox.
-- `uv run pytest -q tests/k8s_smoke` passed with `5 passed`.
+Historical Python checks passed before removal: the full Python suite, side-by-side smoke suite, and original fake Kubernetes smoke suite were green before those active paths were deleted.
 
 Required validation for this cleanup:
 
@@ -59,16 +60,19 @@ go test ./...
 go vet ./...
 go build ./cmd/borg
 go build ./cmd/borg-genkey
-go build -o bin/borg-go ./cmd/borg
-uv run pytest -q tests/k8s_smoke
+go build -o /tmp/dummy-openai ./dummy-openai
+bash -n scripts/validate-kind-go.sh
+bash -n .devcontainer/post-create.sh
 helm lint ./charts/borg
 helm template borg ./charts/borg --debug
+helm lint ./dummy-openai/charts/dummy-openai
+helm template dummy-openai ./dummy-openai/charts/dummy-openai --debug
 git diff --check
 ```
 
-This cleanup pass has run the full list above successfully. The retained `tests/k8s_smoke` suite requires localhost sockets; a sandboxed rerun failed with `PermissionError: [Errno 1] Operation not permitted`, then passed outside the sandbox with `5 passed`.
+The Go-native `tests/k8s_smoke` suite builds `./cmd/borg` in `TestMain` and requires localhost sockets for fake Kubernetes and dummy upstream servers. In this devcontainer, run it outside the sandbox or with `GOCACHE=/tmp/go-build-cache`.
 
-Required validation for the current dummy replacement slice:
+Dummy replacement validation already passed:
 
 ```bash
 go test ./...
@@ -79,7 +83,7 @@ helm template dummy-openai ./dummy-openai/charts/dummy-openai --debug
 git diff --check
 ```
 
-The local-safe validation for this slice has passed. `go build -o /tmp/dummy-openai ./dummy-openai` emitted a non-fatal read-only Go module stat-cache warning in this container, then exited successfully.
+The local-safe validation for the dummy slice passed. `go build -o /tmp/dummy-openai ./dummy-openai` emitted a non-fatal read-only Go module stat-cache warning in this container, then exited successfully.
 
 Host/raw WSL dummy replacement validation has also passed:
 
@@ -146,4 +150,4 @@ Token utility:
 - `docs/migration/kind-go-validation-harness.md`: real KinD Go validation harness
 
 ## Next Step
-Run the cleanup validation list above. After it is green, commit the Python runtime removal and CI/doc cleanup.
+Run the cleanup validation list above. After it is green, commit the Go-native smoke harness and UV removal.

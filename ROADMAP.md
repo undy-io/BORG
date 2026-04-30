@@ -3,7 +3,7 @@
 ## Goal
 Migrate BORG from Python to Go using a side-by-side strategy that preserved current behavior through cutover and then retired the Python implementation once Go became the default runtime.
 
-The Go implementation is now the only active BORG runtime. Python remains only for the retained fake Kubernetes smoke-test harness.
+The Go implementation is now the only active BORG runtime. Python has been removed from active tooling; the remaining Python references are historical migration documents.
 
 ## Current Status
 - Milestone 1 is complete.
@@ -12,7 +12,7 @@ The Go implementation is now the only active BORG runtime. Python remains only f
 - Go proxy review hardening is complete for compression/header handling and backend API key precedence.
 - The old Python-vs-Go side-by-side smoke harness has been removed with the Python runtime.
 - Go Kubernetes discovery is implemented behind the existing static proxy path.
-- Fake Kubernetes API smoke validation for Go discovery is implemented under `tests/k8s_smoke`.
+- Go-native fake Kubernetes API smoke validation for Go discovery is implemented under `tests/k8s_smoke`.
 - Go `borg-genkey` is implemented and the legacy Python `genkey.py` has been removed.
 - The root Docker image now targets Go BORG by default; host Docker build validation is the remaining cutover gate.
 - The Helm chart now deploys the Go runtime by default while preserving its values shape and runtime wiring.
@@ -21,8 +21,8 @@ The Go implementation is now the only active BORG runtime. Python remains only f
 - Host/raw WSL KinD validation works with the node image pinned to Kubernetes v1.34.3.
 - A repeatable host/raw WSL KinD Go validation script exists at `scripts/validate-kind-go.sh` and has passed the full create/delete path.
 - The KinD harness validates real discovery, `/v1/models`, missing-auth rejection, authenticated POST forwarding, upstream auth rewrite, and streaming SSE.
-- The Python runtime, Python package build path, Python runtime tests, and dedicated Python CI workflow have been removed.
-- The next major implementation lane is final cleanup: simplify remaining migration docs, reduce devcontainer Python assumptions, and eventually port or replace the retained Python smoke harness.
+- The Python runtime, Python package build path, Python runtime tests, UV tooling, dedicated Python CI workflow, and devcontainer Python assumptions have been removed.
+- The next major implementation lane is final cleanup: simplify remaining migration docs.
 
 ## Working Model
 - This roadmap stays high level and milestone-oriented.
@@ -71,7 +71,7 @@ Exit criteria:
 Layout target:
 - The planned Go tree is documented in `docs/migration/go-project-layout.md`.
 - The local smoke/parity harness was removed when the Python runtime was retired.
-- The fake Kubernetes API smoke harness is implemented under `tests/k8s_smoke` and documented in `docs/migration/go-k8s-smoke-test-harness.md`.
+- The Go-native fake Kubernetes API smoke harness is implemented under `tests/k8s_smoke` and documented in `docs/migration/go-k8s-smoke-test-harness.md`.
 - The primary service entrypoint should live at `cmd/borg` and build to `bin/borg-go` during migration.
 - Application internals should live under `internal/`.
 

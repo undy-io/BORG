@@ -109,9 +109,10 @@ Use this harness after the faster local checks are green:
 
 ```bash
 go test ./...
-go build -o bin/borg-go ./cmd/borg
-go build -o bin/borg-genkey ./cmd/borg-genkey
-uv run pytest -q tests/k8s_smoke
+go vet ./...
+go build ./cmd/borg
+go build ./cmd/borg-genkey
+go test ./tests/k8s_smoke
 ```
 
 The fake Kubernetes smoke suite proves Go discovery behavior without Docker or a real cluster.

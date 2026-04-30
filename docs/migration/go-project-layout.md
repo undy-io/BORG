@@ -3,15 +3,16 @@
 ## Purpose
 This document defines the active Go repository shape used by BORG.
 
-Go is now the only active BORG runtime. The former Python implementation has been removed from the source tree; the remaining Python code exists only for Go validation helpers.
+Go is now the only active BORG runtime. The former Python implementation and active Python/UV tooling, including devcontainer Python setup, have been removed from the source tree; remaining Python references are historical migration docs only.
 
 ## Current State
 - Go core proxying, Kubernetes discovery, and token generation are implemented.
 - The root Dockerfile builds `/usr/local/bin/borg` and `/usr/local/bin/borg-genkey`.
 - The Helm chart deploys the Go runtime by default while preserving its values shape.
-- Go CI runs unit tests, vet, command builds, and fake Kubernetes smoke validation.
-- `tests/k8s_smoke` remains as a Python-based smoke harness for the Go binary.
+- Go CI runs unit tests, vet, command builds, and Go-native fake Kubernetes smoke validation through `go test ./...`.
+- `tests/k8s_smoke` remains as a Go-native smoke harness for the Go binary.
 - `dummy-openai/` remains as a Go test backend for KinD validation.
+- The devcontainer uses a Go-neutral base image and no longer installs UV or Python editor tooling.
 - In the current rootless/containerized WSL environment, Docker-in-Docker cannot start containers because cpuset cgroups are not writable; KinD validation needs host/outside-devcontainer Docker, Docker-outside-of-Docker, or CI/VM infrastructure.
 - Host/raw WSL KinD validation works with the node image pinned to Kubernetes v1.34.3.
 - `scripts/validate-kind-go.sh` automates host/raw WSL KinD validation for Go BORG discovery, authenticated POST forwarding, and streaming.
@@ -22,8 +23,8 @@ Go is now the only active BORG runtime. The former Python implementation has bee
 - Keep Go application internals under `internal/` so they are not treated as a public library API.
 - Keep executable entrypoints under `cmd/`.
 - Keep Go tests beside the packages they exercise.
-- Keep Python out of the runtime and release path.
-- Treat retained Python as validation harness code only.
+- Keep Python out of the runtime, release, and active validation paths.
+- Treat `docs/migration/python-*.md` as historical references only.
 - Prefer standard library packages unless a dependency removes real complexity.
 
 ## Active Tree
@@ -48,12 +49,10 @@ Go is now the only active BORG runtime. The former Python implementation has bee
 │   └── k8s_smoke/
 ├── dummy-openai/
 ├── go.mod
-├── go.sum
-├── pyproject.toml
-└── uv.lock
+└── go.sum
 ```
 
-`pyproject.toml` and `uv.lock` are retained only for the fake Kubernetes smoke tests.
+The former Python package manifest and lockfile have been removed because the smoke tests are now Go-native.
 
 ## Entry Points
 ### `cmd/borg`
@@ -69,7 +68,7 @@ Responsibilities:
 
 Production images install this command as `/usr/local/bin/borg`.
 
-During local smoke testing, build it as `bin/borg-go`:
+During local manual testing, build it as `bin/borg-go`:
 
 ```bash
 mkdir -p bin
@@ -214,8 +213,7 @@ go build -o bin/borg-genkey ./cmd/borg-genkey
 Run retained smoke validation:
 
 ```bash
-uv sync --frozen
-uv run pytest -q tests/k8s_smoke
+go test ./tests/k8s_smoke
 ```
 
 On a host/runtime with usable Docker cgroups, run the repeatable Go KinD validation harness from raw WSL/host:
@@ -237,6 +235,6 @@ The active runtime baseline is useful when:
 - config path and port precedence are stable
 - core proxy behavior is covered by Go package tests
 - Kubernetes discovery is covered by Go package tests
-- fake API smoke tests exercise the real `bin/borg-go` process
+- fake API smoke tests build and exercise the real Go `borg` process
 - `README.md`, `ROADMAP.md`, `MILESTONE.md`, and `SESSION_RECOVERY.md` describe the Go-only runtime
 - historical Python docs are clearly marked as historical

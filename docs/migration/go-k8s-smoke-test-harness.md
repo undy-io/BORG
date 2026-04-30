@@ -3,13 +3,13 @@
 ## Purpose
 Validate Go Kubernetes discovery locally without Docker, Helm, KinD, Minikube, or cluster credentials.
 
-The suite runs the real `bin/borg-go` process against:
+The suite builds and runs the real Go `borg` process against:
 - a fake Kubernetes API server exposed over localhost
 - a temporary kubeconfig pointing `client-go` at that fake API
 - local OpenAI-compatible dummy upstream servers
 
 Implemented test suite:
-- `tests/k8s_smoke/test_go_k8s_discovery.py`
+- `tests/k8s_smoke/k8s_smoke_test.go`
 
 ## Harness Shape
 The fake Kubernetes API implements the single discovery path the Go service needs for polling:
@@ -38,18 +38,16 @@ The BORG config uses `update_interval: 1` and a real `k8s_discover` selector. St
 - forwarding through discovered endpoints with `Bearer EMPTY`
 
 ## Execution Contract
-Build the Go binary first, then run the suite:
+Run the suite directly with Go:
 
 ```bash
-mkdir -p bin
-go build -o bin/borg-go ./cmd/borg
-uv run pytest -q tests/k8s_smoke
+go test ./tests/k8s_smoke
 ```
 
-The suite skips with a clear message when `bin/borg-go` is missing.
+`TestMain` builds `./cmd/borg` once into an OS temp directory and each test starts that binary as a subprocess.
 
 ## Out Of Scope
-- Python parity
+- historical Python parity
 - real Kubernetes RBAC
 - real pod networking
 - Helm rendering

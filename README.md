@@ -160,9 +160,7 @@ bash -n scripts/validate-kind-go.sh
 Go fake Kubernetes smoke checks:
 
 ```bash
-mkdir -p bin
-go build -o bin/borg-go ./cmd/borg
-uv run pytest -q tests/k8s_smoke
+go test ./tests/k8s_smoke
 ```
 
 On raw WSL/host, validate the Go BORG runtime against a real KinD cluster with:
@@ -200,7 +198,7 @@ kind delete cluster --name borg
 ```
 
 Go package tests live beside the Go packages under `internal/`.
-The retained Python smoke suite in `tests/k8s_smoke` runs the Go proxy against a fake Kubernetes API and local dummy upstreams.
+The Go smoke suite in `tests/k8s_smoke` runs the real Go proxy against a fake Kubernetes API and local dummy upstreams.
 The `dummy-openai/` Go app remains as a lightweight test backend for local and KinD validation.
 
 ---
@@ -233,7 +231,7 @@ The `dummy-openai/` Go app remains as a lightweight test backend for local and K
 
 1. Fork & clone
 2. Make changes, add tests
-3. Run `go test ./...` and `go vet ./...`; when touching retained smoke harness code, also run `uv run pytest -q tests/k8s_smoke`
+3. Run `go test ./...` and `go vet ./...`; when touching smoke harness code, also run `go test ./tests/k8s_smoke`
 4. PR against **master**
 
 ---
