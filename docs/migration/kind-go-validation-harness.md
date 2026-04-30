@@ -74,7 +74,7 @@ The script:
 - waits for the control-plane node to become `Ready`
 - builds host Go binaries into ignored `build/kind/`
 - packages `borg-go:kind` from the local binary instead of running `go mod download` inside Docker
-- builds `dummy-openai:kind`
+- builds the Go `dummy-openai:kind` validation backend image
 - loads both images into KinD, falling back to direct containerd import if `kind load docker-image` cannot detect the node snapshotter
 - deploys `dummy-openai` into `vllm-services`
 - deploys Go BORG into `borg`
@@ -118,7 +118,7 @@ The fake Kubernetes smoke suite proves Go discovery behavior without Docker or a
 The KinD harness proves that the Go runtime, Helm chart, Kubernetes discovery, auth utility, and container packaging work together in a real local cluster.
 
 ## Current Validation State
-The full create/delete path has passed from raw WSL:
+The full create/delete path has passed from raw WSL with the Go dummy backend:
 
 ```bash
 scripts/validate-kind-go.sh --create-cluster --delete-cluster

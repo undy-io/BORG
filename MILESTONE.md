@@ -7,7 +7,8 @@
 - The production image builds `/usr/local/bin/borg` and `/usr/local/bin/borg-genkey`.
 - The dedicated Python CI workflow has been removed.
 - The Python package build path, legacy `genkey.py`, Python runtime tests, and Python-vs-Go parity smoke suite have been removed.
-- The retained Python code is limited to the fake Kubernetes smoke harness and the `dummy-openai` validation backend.
+- The retained Python code is limited to the fake Kubernetes smoke harness.
+- The `dummy-openai` validation backend has been replaced with a tiny Go service.
 - Host Docker build validation remains the only cutover gate that cannot be proven inside this devcontainer.
 
 ## Objective
@@ -23,13 +24,12 @@ In scope:
 - Remove Python runtime tests.
 - Remove the Python-vs-Go parity smoke suite under `tests/smoke`.
 - Keep `tests/k8s_smoke` as a Python-based harness for the Go binary.
-- Keep `dummy-openai/` as a Python test backend for KinD validation.
+- Keep `dummy-openai/` as a Go test backend for KinD validation.
 - Add retained smoke validation to Go CI.
 - Update README, roadmap, and recovery docs to describe the Go-only runtime.
 
 Out of scope:
 - Porting the retained Python smoke harness to Go.
-- Replacing the Python `dummy-openai` backend.
 - Moving historical Python contract docs into an archive.
 - Changing Helm values or discovery semantics.
 - Moving real KinD validation into CI.
@@ -74,14 +74,15 @@ Validation:
 
 ### Checkpoint 4: Host Validation
 Tasks:
-- [ ] Keep real KinD validation available from raw WSL/host.
+- [x] Keep real KinD validation available from raw WSL/host.
 - [ ] Keep host Docker image build as the remaining environment-specific gate.
 
 Validation:
 - [x] `scripts/validate-kind-go.sh --create-cluster --delete-cluster`
+- [x] `docker build -t dummy-openai:kind ./dummy-openai`
 - [ ] `docker build -t borg-go:cutover .`
 
 ## Remaining Work
 - Run `docker build -t borg-go:cutover .` from raw WSL/host or CI.
-- Consider a follow-up to port `tests/k8s_smoke` and `dummy-openai` away from Python.
+- Consider a follow-up to port `tests/k8s_smoke` away from Python.
 - Simplify or archive the historical migration docs after the cleanup is merged.

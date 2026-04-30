@@ -3,7 +3,7 @@
 ## Goal
 Migrate BORG from Python to Go using a side-by-side strategy that preserved current behavior through cutover and then retired the Python implementation once Go became the default runtime.
 
-The Go implementation is now the only active BORG runtime. Python remains only for retained Go smoke-test harnesses and the dummy OpenAI test backend.
+The Go implementation is now the only active BORG runtime. Python remains only for the retained fake Kubernetes smoke-test harness.
 
 ## Current Status
 - Milestone 1 is complete.

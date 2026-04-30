@@ -201,7 +201,7 @@ kind delete cluster --name borg
 
 Go package tests live beside the Go packages under `internal/`.
 The retained Python smoke suite in `tests/k8s_smoke` runs the Go proxy against a fake Kubernetes API and local dummy upstreams.
-The `dummy-openai/` Python app remains as a lightweight test backend for local and KinD validation.
+The `dummy-openai/` Go app remains as a lightweight test backend for local and KinD validation.
 
 ---
 

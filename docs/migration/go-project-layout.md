@@ -11,7 +11,7 @@ Go is now the only active BORG runtime. The former Python implementation has bee
 - The Helm chart deploys the Go runtime by default while preserving its values shape.
 - Go CI runs unit tests, vet, command builds, and fake Kubernetes smoke validation.
 - `tests/k8s_smoke` remains as a Python-based smoke harness for the Go binary.
-- `dummy-openai/` remains as a Python test backend for KinD validation.
+- `dummy-openai/` remains as a Go test backend for KinD validation.
 - In the current rootless/containerized WSL environment, Docker-in-Docker cannot start containers because cpuset cgroups are not writable; KinD validation needs host/outside-devcontainer Docker, Docker-outside-of-Docker, or CI/VM infrastructure.
 - Host/raw WSL KinD validation works with the node image pinned to Kubernetes v1.34.3.
 - `scripts/validate-kind-go.sh` automates host/raw WSL KinD validation for Go BORG discovery, authenticated POST forwarding, and streaming.

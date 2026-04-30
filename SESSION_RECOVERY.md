@@ -4,24 +4,26 @@ Use this file to resume the Go migration if chat history is lost.
 
 ## Current Branch State
 - Branch: `go-migration`
-- Latest committed baseline: `fa41e2a Make KinD image loading more resilient`
-- Current uncommitted work: Python runtime cleanup and retained Go smoke harness CI.
+- Latest committed baseline: `e03e768 starting purge of the python code`
+- Current uncommitted work: replace the Python/FastAPI `dummy-openai` validation backend with a tiny Go service.
 - Unrelated local file: `.codex`
 - Active runtime: Go BORG only
 - Removed runtime state: `src/borg/`, legacy `genkey.py`, `entrypoint.sh`, Python runtime tests, Python-vs-Go parity smoke tests, and dedicated Python CI are removed.
-- Retained Python state: `tests/k8s_smoke` and `dummy-openai/` remain as validation helpers for the Go runtime.
+- Retained Python state: `tests/k8s_smoke` remains as a validation helper for the Go runtime.
+- Go validation helpers: `dummy-openai/` is a tiny Go OpenAI-compatible test backend for KinD validation.
 - Deployment default status: root Docker image, Helm chart image path, and Go CI target the Go runtime.
 
-Current cleanup slice:
-- `.github/workflows/go.yml`
-- `.github/workflows/python.yml`
+Current dummy replacement slice:
+- `dummy-openai/main.go`
+- `dummy-openai/main_test.go`
+- `dummy-openai/main.py`
+- `dummy-openai/Dockerfile`
+- `dummy-openai/README.md`
 - `README.md`
 - `ROADMAP.md`
 - `MILESTONE.md`
 - `SESSION_RECOVERY.md`
-- `pyproject.toml`
-- `uv.lock`
-- deleted Python runtime, rollback, and legacy test files
+- `docs/migration/go-project-layout.md`
 
 Do not stage `.codex`; it is unrelated local state.
 
@@ -66,11 +68,33 @@ git diff --check
 
 This cleanup pass has run the full list above successfully. The retained `tests/k8s_smoke` suite requires localhost sockets; a sandboxed rerun failed with `PermissionError: [Errno 1] Operation not permitted`, then passed outside the sandbox with `5 passed`.
 
+Required validation for the current dummy replacement slice:
+
+```bash
+go test ./...
+go build -o /tmp/dummy-openai ./dummy-openai
+bash -n scripts/validate-kind-go.sh
+helm lint ./dummy-openai/charts/dummy-openai
+helm template dummy-openai ./dummy-openai/charts/dummy-openai --debug
+git diff --check
+```
+
+The local-safe validation for this slice has passed. `go build -o /tmp/dummy-openai ./dummy-openai` emitted a non-fatal read-only Go module stat-cache warning in this container, then exited successfully.
+
+Host/raw WSL dummy replacement validation has also passed:
+
+```bash
+docker build -t dummy-openai:kind ./dummy-openai
+scripts/validate-kind-go.sh --create-cluster --delete-cluster
+```
+
+That run built the scratch-based Go dummy image, created the KinD cluster, used the direct containerd import fallback for both images, deployed dummy and BORG with Helm, validated root/models/auth/forwarding/SSE, and deleted the cluster.
+
 Host/raw WSL validation:
 - A host `docker build` can hit transient `proxy.golang.org` TLS handshake timeouts during `go mod download`; retry or use `docker build --network=host -t borg-go:cutover .`.
 - Docker-in-Docker KinD inside the devcontainer is blocked by non-writable cpuset cgroups.
 - The committed KinD harness fix wraps `kind load docker-image` with a direct `docker save | docker exec <node> ctr -n k8s.io images import --all-platforms -` fallback.
-- The full KinD create/delete path has passed from raw WSL/host after this fix.
+- The full KinD create/delete path has passed from raw WSL/host after the image-load fallback and again after the Go dummy backend replacement.
 
 Repeat host/raw WSL validation when touching Docker, Helm, discovery, or the harness:
 
