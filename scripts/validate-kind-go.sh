@@ -103,6 +103,7 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 BUILD_DIR="${REPO_ROOT}/build/kind"
 KUBE_CONTEXT="kind-${CLUSTER_NAME}"
 KUBECONFIG_COPY="${BUILD_DIR}/kubeconfig"
+PORT_FORWARD_LOG="${BUILD_DIR}/port-forward.log"
 
 cleanup() {
   local status=$?
@@ -147,7 +148,13 @@ print_debug() {
     printf '\n# Dummy logs\n'
     kubectl --context "$KUBE_CONTEXT" -n "$DUMMY_NAMESPACE" logs "deploy/${DUMMY_DEPLOYMENT}" --tail=100
     printf '\n# Port-forward log\n'
-    cat "${BUILD_DIR}/port-forward.log"
+    if [[ -n "$PORT_FORWARD_PID" && -s "$PORT_FORWARD_LOG" ]]; then
+      cat "$PORT_FORWARD_LOG"
+    elif [[ -n "$PORT_FORWARD_PID" ]]; then
+      printf '(port-forward started but did not write log output)\n'
+    else
+      printf '(port-forward was not started)\n'
+    fi
     printf '\n--- end debug ---\n'
   } >&2
 }
@@ -161,6 +168,7 @@ for cmd in go docker kind kubectl helm curl; do
 done
 
 mkdir -p "$BUILD_DIR"
+: > "$PORT_FORWARD_LOG"
 
 ensure_cluster() {
   if kind get clusters | grep -Fxq "$CLUSTER_NAME"; then
@@ -213,10 +221,30 @@ EOF
   docker build -t "$DUMMY_IMAGE" "${REPO_ROOT}/dummy-openai"
 }
 
+load_image() {
+  local image="$1"
+
+  if kind load docker-image "$image" --name "$CLUSTER_NAME"; then
+    return
+  fi
+
+  log "kind load failed for ${image}; falling back to direct containerd import"
+  local node
+  local imported=0
+  while IFS= read -r node; do
+    [[ -n "$node" ]] || continue
+    imported=1
+    log "Importing ${image} into ${node}"
+    docker save "$image" | docker exec -i "$node" ctr -n k8s.io images import --all-platforms -
+  done < <(kind get nodes --name "$CLUSTER_NAME")
+
+  [[ "$imported" -eq 1 ]] || die "no KinD nodes found for cluster ${CLUSTER_NAME}"
+}
+
 load_images() {
   log "Loading images into KinD"
-  kind load docker-image "$DUMMY_IMAGE" --name "$CLUSTER_NAME"
-  kind load docker-image "$BORG_IMAGE" --name "$CLUSTER_NAME"
+  load_image "$DUMMY_IMAGE"
+  load_image "$BORG_IMAGE"
 }
 
 deploy_dummy() {
@@ -288,7 +316,7 @@ start_port_forward() {
   kubectl --context "$KUBE_CONTEXT" -n "$BORG_NAMESPACE" port-forward \
     "svc/${BORG_SERVICE}" \
     "${LOCAL_PORT}:80" \
-    > "${BUILD_DIR}/port-forward.log" 2>&1 &
+    > "$PORT_FORWARD_LOG" 2>&1 &
   PORT_FORWARD_PID=$!
   wait_for_http "http://127.0.0.1:${LOCAL_PORT}/"
 }

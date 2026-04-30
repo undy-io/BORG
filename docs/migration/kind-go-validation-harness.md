@@ -75,7 +75,7 @@ The script:
 - builds host Go binaries into ignored `build/kind/`
 - packages `borg-go:kind` from the local binary instead of running `go mod download` inside Docker
 - builds `dummy-openai:kind`
-- loads both images into KinD
+- loads both images into KinD, falling back to direct containerd import if `kind load docker-image` cannot detect the node snapshotter
 - deploys `dummy-openai` into `vllm-services`
 - deploys Go BORG into `borg`
 - writes Helm values with `update_interval: 2`, auth prefix `PROXY:`, and discovery selector `borg/expose=vllm`
@@ -100,7 +100,7 @@ On failure after cluster readiness, the script prints:
 - BORG deployment describe output
 - recent BORG logs
 - recent dummy backend logs
-- port-forward log output
+- port-forward log output, when port-forwarding was started
 
 By default, the script leaves resources in place for debugging. Use `--cleanup-resources` when you want the script to remove Helm releases and namespaces before exit.
 

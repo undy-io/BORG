@@ -4,29 +4,18 @@ Use this file to resume the Go migration if chat history is lost.
 
 ## Current Branch State
 - Branch: `go-migration`
-- Latest committed baseline before this cutover pass: `10e5cb4 Kind validation script works`
-- Current uncommitted work: hard Go runtime cutover
+- Latest committed baseline: `d4643b Cut over default runtime to Go`
+- Current uncommitted work: KinD validation harness resilience for host image-loading failures
 - Unrelated local file: `.codex`
 - Default deployable runtime: Go BORG
 - Python runtime status: retained in-tree as the reference/rollback path
 - Deployment default status: root Docker image, Helm chart image path, and Go CI now target the Go runtime
-- Review fix status: non-root image hardening is deferred for port compatibility, and Go BORG has graceful SIGTERM/SIGINT shutdown.
+- Cutover review fix status: non-root image hardening is deferred for port compatibility, and Go BORG has graceful SIGTERM/SIGINT shutdown.
 
-Current uncommitted cutover slice:
-- `Dockerfile`
-- `.dockerignore`
-- `.gitignore`
-- `.github/workflows/go.yml`
-- `.github/workflows/docker.yml`
-- `cmd/borg/main.go`
-- `cmd/borg/main_test.go`
-- `charts/borg/values.yaml`
-- `README.md`
-- `ROADMAP.md`
-- `MILESTONE.md`
-- `SESSION_RECOVERY.md`
-- `docs/migration/go-project-layout.md`
+Current uncommitted harness fix slice:
+- `scripts/validate-kind-go.sh`
 - `docs/migration/kind-go-validation-harness.md`
+- `SESSION_RECOVERY.md`
 
 Do not stage `.codex`; it is unrelated local state.
 
@@ -45,7 +34,7 @@ go build -o bin/borg-genkey ./cmd/borg-genkey
 scripts/validate-kind-go.sh --create-cluster --delete-cluster
 ```
 
-Required cutover validation before commit:
+Hard cutover validation run before commit:
 
 ```bash
 go test ./...
@@ -76,9 +65,11 @@ Cutover validation already run in the devcontainer:
 - `helm template borg ./charts/borg --debug` passed.
 - `git diff --check` passed.
 
-Cutover validation still needed from raw WSL/host:
-- `docker build -t borg-go:cutover .`
-- `scripts/validate-kind-go.sh --create-cluster --delete-cluster`
+Host/raw WSL validation note:
+- A host `docker build` can hit transient `proxy.golang.org` TLS handshake timeouts during `go mod download`; retry or use `docker build --network=host -t borg-go:cutover .`.
+- A host KinD run reached image loading, then `kind load docker-image` failed with `failed to detect containerd snapshotter` before Helm namespaces were created.
+- The current uncommitted harness fix wraps `kind load docker-image` with a direct `docker save | docker exec <node> ctr -n k8s.io images import --all-platforms -` fallback and avoids stale port-forward logs in early-failure debug output.
+- Rerun `scripts/validate-kind-go.sh --create-cluster --delete-cluster` from raw WSL/host after this fix.
 
 The devcontainer Docker build reached `RUN go mod download`, then failed with the known nested Docker cgroup error:
 
@@ -86,7 +77,7 @@ The devcontainer Docker build reached `RUN go mod download`, then failed with th
 unable to apply cgroup configuration: mkdir /sys/fs/cgroup/cpuset/docker/...: permission denied
 ```
 
-Required host/raw WSL validation before calling the cutover fully proven:
+Required host/raw WSL validation before calling the current harness fix proven:
 
 ```bash
 scripts/validate-kind-go.sh --create-cluster --delete-cluster
@@ -165,7 +156,7 @@ Token utility:
 - `docs/migration/kind-go-validation-harness.md`: real KinD Go validation harness
 
 ## Next Step
-Finish validation for the hard Go cutover, then commit it.
+Rerun the KinD validation from raw WSL/host. If the fallback path passes, commit the harness resilience fix.
 
 After the cutover is committed and KinD remains green, plan the cleanup milestone:
 - remove or archive Python runtime code
