@@ -41,6 +41,7 @@ The BORG config uses `update_interval: 1` and a real `k8s_discover` selector. St
 Build the Go binary first, then run the suite:
 
 ```bash
+mkdir -p bin
 go build -o bin/borg-go ./cmd/borg
 uv run pytest -q tests/k8s_smoke
 ```

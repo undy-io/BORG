@@ -1,7 +1,9 @@
 # Python Ops Contract
 
+Historical note: the Python BORG runtime has been removed from the active source tree. This document is retained only as migration history for the behavior that the Go runtime matched during cutover.
+
 ## Purpose
-This document freezes the intended Python discovery, deployment, and operational contract that the Go implementation should match during the migration.
+This document froze the intended Python discovery, deployment, and operational contract that the Go implementation matched during the migration.
 
 Where current Python behavior diverges from the intended contract, this document treats the Python behavior as a bug to normalize before or during the Go port, not as parity to preserve.
 

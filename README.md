@@ -11,19 +11,18 @@
 
 ## Migration status
 
-BORG now defaults to the Go runtime. The Python implementation remains in the repository as a reference and rollback path during the transition window.
+BORG now defaults to the Go runtime. The retired Python implementation has been removed from the active source tree.
 
 - Milestone 1 froze the Python contract in `docs/migration/`.
 - Milestone 2 added the Go core proxy, Kubernetes discovery, and Go `borg-genkey`.
-- The cutover pass switched the root Docker image, Helm chart default image path, and CI/release validation toward Go.
-- The Python service in `src/borg/` and Python tests remain as the reference/rollback path until the cleanup milestone.
-- The Kubernetes-free local smoke/parity harness is implemented in `tests/smoke` and documented in `docs/migration/local-smoke-test-harness.md`.
+- The cutover pass switched the root Docker image, Helm chart default image path, and CI/release validation to Go.
+- The dedicated Python CI workflow, Python runtime, legacy `genkey.py`, and Python package build path have been removed.
 - The fake Kubernetes API smoke harness for Go discovery is implemented in `tests/k8s_smoke` and documented in `docs/migration/go-k8s-smoke-test-harness.md`.
 - The host/raw WSL KinD validation harness is implemented in `scripts/validate-kind-go.sh` and documented in `docs/migration/kind-go-validation-harness.md`.
 - Docker-in-Docker KinD inside the devcontainer is blocked in the current rootless/containerized WSL environment by non-writable cpuset cgroups; run real KinD validation from raw WSL/host for now.
 - The planned Go layout is documented in `docs/migration/go-project-layout.md`.
 
-The production container exposes the Go service as `/usr/local/bin/borg`. During local migration testing, build it as `bin/borg-go` so it can run beside the Python `borg` CLI without ambiguity.
+The production container exposes the Go service as `/usr/local/bin/borg`. During local smoke testing, build it as `bin/borg-go`.
 
 ---
 
@@ -48,15 +47,9 @@ The production container exposes the Go service as `/usr/local/bin/borg`. During
 git clone https://github.com/undy-io/BORG.git
 cd BORG
 cp config.example.yaml config.yaml
+mkdir -p bin
 go build -o bin/borg-go ./cmd/borg
 ./bin/borg-go --config config.yaml
-```
-
-Python remains available as a rollback/reference path:
-
-```bash
-uv sync --frozen
-uv run borg --config config.yaml --reload
 ```
 
 ### 2 – Docker
@@ -138,13 +131,10 @@ Key values
 Use the Go token utility for new installs:
 
 ```bash
+mkdir -p bin
 go build -o bin/borg-genkey ./cmd/borg-genkey
 bin/borg-genkey <username> --namespace <namespace> --release <release>
 ```
-
-`genkey.py` remains in the repository for legacy Python rollback workflows during the transition window.
-
----
 
 ## 🖧 How discovery works
 
@@ -160,21 +150,18 @@ bin/borg-genkey <username> --namespace <namespace> --release <release>
 Core local checks:
 
 ```bash
-uv run pytest -q
-uv run mypy src
-uv run ruff check .
-uv run ruff format --check .
 go test ./...
 go vet ./...
+go build ./cmd/borg
+go build ./cmd/borg-genkey
 bash -n scripts/validate-kind-go.sh
 ```
 
-Go migration smoke checks:
+Go fake Kubernetes smoke checks:
 
 ```bash
+mkdir -p bin
 go build -o bin/borg-go ./cmd/borg
-go build -o bin/borg-genkey ./cmd/borg-genkey
-uv run pytest -q tests/smoke
 uv run pytest -q tests/k8s_smoke
 ```
 
@@ -212,10 +199,9 @@ kubectl get pods -A
 kind delete cluster --name borg
 ```
 
-Unit tests live under `tests/`.
 Go package tests live beside the Go packages under `internal/`.
-The smoke suite in `tests/smoke` runs the Python and Go proxies side by side against local dummy upstreams.
-The smoke suite in `tests/k8s_smoke` runs the Go proxy against a fake Kubernetes API and local dummy upstreams.
+The retained Python smoke suite in `tests/k8s_smoke` runs the Go proxy against a fake Kubernetes API and local dummy upstreams.
+The `dummy-openai/` Python app remains as a lightweight test backend for local and KinD validation.
 
 ---
 
@@ -226,11 +212,10 @@ The smoke suite in `tests/k8s_smoke` runs the Go proxy against a fake Kubernetes
 | `ROADMAP.md` | High-level migration milestones |
 | `MILESTONE.md` | Active milestone tasks and validation |
 | `SESSION_RECOVERY.md` | Durable handoff state if chat history is lost |
-| `docs/migration/python-runtime-contract.md` | Python CLI, config, env, and auth contract |
-| `docs/migration/python-http-contract.md` | Python HTTP/proxy behavior contract |
-| `docs/migration/python-ops-contract.md` | Python discovery, Helm, and runtime ops contract |
-| `docs/migration/go-project-layout.md` | Target side-by-side Go project layout |
-| `docs/migration/local-smoke-test-harness.md` | Local Python-vs-Go smoke/parity harness design |
+| `docs/migration/python-runtime-contract.md` | Historical Python CLI, config, env, and auth contract |
+| `docs/migration/python-http-contract.md` | Historical Python HTTP/proxy behavior contract |
+| `docs/migration/python-ops-contract.md` | Historical Python discovery, Helm, and runtime ops contract |
+| `docs/migration/go-project-layout.md` | Go project layout |
 | `docs/migration/go-k8s-smoke-test-harness.md` | Local fake Kubernetes API smoke harness for Go discovery |
 | `docs/migration/kind-go-validation-harness.md` | Real KinD deployment validation for the Go runtime |
 
@@ -238,7 +223,6 @@ The smoke suite in `tests/k8s_smoke` runs the Go proxy against a fake Kubernetes
 
 ## 📦 Release workflow
 
-* Pushes and pull requests run Python CI from `.github/workflows/python.yml`.
 * Pushes and pull requests run Go CI from `.github/workflows/go.yml`.
 * Pushes to **master** build Go runtime `:edge` and `:sha-<short>` images from `.github/workflows/docker.yml`.
 * Tagging `vX.Y.Z` also produces `:latest`, `:X.Y`, and `:X.Y.Z` tags.
@@ -248,10 +232,9 @@ The smoke suite in `tests/k8s_smoke` runs the Go proxy against a fake Kubernetes
 ## 🤝 Contributing
 
 1. Fork & clone
-2. `uv sync --frozen`
-3. Make changes, add tests
-4. Run `go test ./...`, `go vet ./...`, `uv run pytest`, `uv run mypy src`, `uv run ruff check .`, and `uv run ruff format --check .`
-5. PR against **master**
+2. Make changes, add tests
+3. Run `go test ./...` and `go vet ./...`; when touching retained smoke harness code, also run `uv run pytest -q tests/k8s_smoke`
+4. PR against **master**
 
 ---
 

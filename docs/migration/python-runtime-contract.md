@@ -1,7 +1,9 @@
 # Python Runtime Contract
 
+Historical note: the Python BORG runtime has been removed from the active source tree. This document is retained only as migration history for the behavior that the Go runtime matched during cutover.
+
 ## Purpose
-This document freezes the current Python runtime/config/auth contract that the Go implementation must match during the migration.
+This document froze the Python runtime/config/auth contract that the Go implementation matched during the migration.
 
 ## Sources
 - `pyproject.toml`

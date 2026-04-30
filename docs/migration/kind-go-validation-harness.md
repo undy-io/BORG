@@ -111,11 +111,9 @@ Use this harness after the faster local checks are green:
 go test ./...
 go build -o bin/borg-go ./cmd/borg
 go build -o bin/borg-genkey ./cmd/borg-genkey
-uv run pytest -q tests/smoke
 uv run pytest -q tests/k8s_smoke
 ```
 
-The local smoke suite proves Python-vs-Go static proxy parity without Kubernetes.
 The fake Kubernetes smoke suite proves Go discovery behavior without Docker or a real cluster.
 The KinD harness proves that the Go runtime, Helm chart, Kubernetes discovery, auth utility, and container packaging work together in a real local cluster.
 

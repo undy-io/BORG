@@ -1,40 +1,40 @@
 # BORG Go Migration Roadmap
 
 ## Goal
-Migrate BORG from Python to Go using a side-by-side strategy that preserves current behavior, keeps rollback simple, and allows us to validate parity before cutover.
+Migrate BORG from Python to Go using a side-by-side strategy that preserved current behavior through cutover and then retired the Python implementation once Go became the default runtime.
 
-The Go implementation is now the default deployable runtime. The Python implementation remains in-tree as a reference and rollback path until the cleanup milestone.
+The Go implementation is now the only active BORG runtime. Python remains only for retained Go smoke-test harnesses and the dummy OpenAI test backend.
 
 ## Current Status
 - Milestone 1 is complete.
 - The Python contract is frozen in `docs/migration/`.
 - The Go service is implemented for core proxying, Kubernetes discovery, and token generation.
 - Go proxy review hardening is complete for compression/header handling and backend API key precedence.
-- Kubernetes-free side-by-side local smoke validation is implemented under `tests/smoke`.
+- The old Python-vs-Go side-by-side smoke harness has been removed with the Python runtime.
 - Go Kubernetes discovery is implemented behind the existing static proxy path.
 - Fake Kubernetes API smoke validation for Go discovery is implemented under `tests/k8s_smoke`.
-- Go `borg-genkey` is implemented beside Python `genkey.py`.
+- Go `borg-genkey` is implemented and the legacy Python `genkey.py` has been removed.
 - The root Docker image now targets Go BORG by default; host Docker build validation is the remaining cutover gate.
 - The Helm chart now deploys the Go runtime by default while preserving its values shape and runtime wiring.
-- Go CI has been added; Python CI remains active during the transition.
+- Go CI has been added; the dedicated Python CI workflow has been removed from the active branch-gating path after the Go default cutover.
 - Devcontainer Docker/KinD/kubectl/Helm tooling installs, but Docker-in-Docker KinD is blocked in the current rootless/containerized WSL environment by non-writable cpuset cgroups.
 - Host/raw WSL KinD validation works with the node image pinned to Kubernetes v1.34.3.
 - A repeatable host/raw WSL KinD Go validation script exists at `scripts/validate-kind-go.sh` and has passed the full create/delete path.
 - The KinD harness validates real discovery, `/v1/models`, missing-auth rejection, authenticated POST forwarding, upstream auth rewrite, and streaming SSE.
-- Python remains available only as the rollback/reference path until removal is safe.
-- The next major implementation lane is cleanup: remove or archive Python, simplify migration docs, and simplify the devcontainer once the Go-default runtime is proven.
+- The Python runtime, Python package build path, Python runtime tests, and dedicated Python CI workflow have been removed.
+- The next major implementation lane is final cleanup: simplify remaining migration docs, reduce devcontainer Python assumptions, and eventually port or replace the retained Python smoke harness.
 
 ## Working Model
 - This roadmap stays high level and milestone-oriented.
 - We will work one milestone at a time.
 - The active milestone will be expanded into a repo-root `MILESTONE.md`.
 - `MILESTONE.md` will contain concrete tasks, sequencing, validation steps, and notes for the current milestone only.
-- We do not remove the Python implementation until the final cutover milestone is complete.
+- The Python implementation has been removed after the Go cutover.
 
 ## Guiding Principles
 - Preserve the external contract first: config shape, env vars, auth token format, HTTP endpoints, streaming behavior, and Helm-facing deployment inputs.
 - Prefer parity over early optimization.
-- Keep the Go service deployable in parallel with the Python service for comparison and rollback.
+- Keep historical Python contract docs available for context until the migration docs are simplified.
 - Validate behavior with automated tests and side-by-side checks before switching production defaults.
 - Keep operational changes incremental so CI, container builds, and Helm remain understandable throughout the migration.
 
@@ -61,7 +61,7 @@ Outcomes:
 - Stand up a minimal Go HTTP service with health/basic endpoints and configuration loading.
 - Establish the internal structure for router, proxy, auth, discovery, and CLI/tooling code.
 - Make the Go service runnable beside the Python service in local development.
-- Keep the Python implementation, tests, Dockerfile, and Helm chart in place as the reference path.
+- Keep the Python implementation, tests, Dockerfile, and Helm chart in place as the reference path during the side-by-side phase.
 
 Exit criteria:
 - The repo can build and run the Go service independently.
@@ -70,7 +70,7 @@ Exit criteria:
 
 Layout target:
 - The planned Go tree is documented in `docs/migration/go-project-layout.md`.
-- The local smoke/parity harness is implemented under `tests/smoke` and documented in `docs/migration/local-smoke-test-harness.md`.
+- The local smoke/parity harness was removed when the Python runtime was retired.
 - The fake Kubernetes API smoke harness is implemented under `tests/k8s_smoke` and documented in `docs/migration/go-k8s-smoke-test-harness.md`.
 - The primary service entrypoint should live at `cmd/borg` and build to `bin/borg-go` during migration.
 - Application internals should live under `internal/`.
@@ -131,14 +131,14 @@ Exit criteria:
 Remove migration scaffolding once the Go-default path is proven.
 
 Outcomes:
-- Remove or archive Python runtime code, Python-only packaging, and legacy `genkey.py`.
+- Remove Python runtime code, Python-only packaging, and legacy `genkey.py`.
 - Simplify documentation from migration-oriented instructions to normal Go project instructions.
 - Simplify the devcontainer to the final Go-first workflow.
-- Decide whether to keep Python contract docs as historical references or move them under an archive.
+- Keep Python contract docs as historical references until migration docs are archived or removed.
 
 Exit criteria:
 - Go is the only active BORG runtime.
-- The repo no longer requires Python for normal build, test, release, or deployment flows.
+- The repo no longer requires Python for normal build, release, or deployment flows.
 - Rollback no longer depends on maintaining Python source in the main tree.
 
 ## Notes For Milestone Planning

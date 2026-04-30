@@ -1,7 +1,9 @@
 # Python HTTP Contract
 
+Historical note: the Python BORG runtime has been removed from the active source tree. This document is retained only as migration history for the behavior that the Go runtime matched during cutover.
+
 ## Purpose
-This document freezes the current Python HTTP behavior that the Go implementation must match during the migration, unless we explicitly choose to normalize a bug first.
+This document froze the Python HTTP behavior that the Go implementation matched during the migration, unless we explicitly chose to normalize a bug first.
 
 ## Sources
 - `src/borg/main.py`
