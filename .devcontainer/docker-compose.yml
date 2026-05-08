@@ -2,11 +2,14 @@ version: "3.8"
 services:
   app:
     image: borg-app:devcontainer
+    privileged: true
+    cgroup: host
     build:
       context: ..
       dockerfile: .devcontainer/Dockerfile
     volumes:
       - ..:/workspaces/borg:cached
+      - /sys/fs/cgroup:/sys/fs/cgroup:rw
     environment:
       POSTGRES_HOST: db
       POSTGRES_PORT: "5432"

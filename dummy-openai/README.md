@@ -1,9 +1,32 @@
 
-podman build -t localhost/dummy-openai:dev .
-rm -f dummy.tar
-podman save --format docker-archive -o dummy.tar localhost/dummy-openai:dev
-kind load image-archive dummy.tar --name borg-dev
+# Dummy OpenAI Backend
 
+This tiny Go helper service is used for local BORG testing with KinD and Helm. It gives BORG an OpenAI-compatible backend to discover during validation.
+
+It implements `GET /v1/models` plus deterministic `POST /v1/chat/completions` responses. When the request body contains `"stream": true`, it returns SSE chunks ending with `data: [DONE]`.
+
+Run it locally:
+
+```bash
+go run ./
+```
+
+Build and load the image:
+
+```bash
+docker build -t dummy-openai:kind .
+kind load docker-image dummy-openai:kind --name borg
+```
+
+Deploy it:
+
+```bash
 helm upgrade --install dummy-openai ./charts/dummy-openai \
-  --set image.repository=localhost/dummy-openai \
-  --set image.tag=dev
+  --namespace vllm-services \
+  --create-namespace \
+  --set image.repository=dummy-openai \
+  --set image.tag=kind \
+  --set image.pullPolicy=IfNotPresent
+```
+
+The repeatable Go validation path is `scripts/validate-kind-go.sh` from the repository root.

@@ -1,11 +1,13 @@
 # syntax=docker/dockerfile:1.5
-FROM python:3.11-slim
+FROM golang:1.26.2-trixie AS builder
 
-# install lightweight web server
-RUN pip install --no-cache-dir fastapi uvicorn[standard]
+WORKDIR /src
+COPY main.go ./
+RUN CGO_ENABLED=0 GO111MODULE=off go build -trimpath -ldflags="-s -w" -o /out/dummy-openai .
 
-WORKDIR /app
-COPY main.py /app/main.py
+FROM scratch
+
+COPY --from=builder /out/dummy-openai /dummy-openai
 
 EXPOSE 8000
-CMD ["uvicorn", "main:app", "--host=0.0.0.0", "--port=8000"]
+CMD ["/dummy-openai"]

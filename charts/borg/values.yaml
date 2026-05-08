@@ -1,6 +1,7 @@
 replicaCount: 2
 
 image:
+  # Go BORG runtime image. The chart no longer runs the Python service by default.
   repository: ghcr.io/undy-io/borg
   tag: edge
   pullPolicy: IfNotPresent
@@ -8,6 +9,9 @@ image:
 authKeySecret:
   name: borg-auth
   key: BORG_AUTH_KEY
+  # Optional URL-safe auth key string. This should be the printable base64url
+  # value the app consumes, not a Secret.data-encoded blob.
+  # value: ""
 
 apikeySecrets:
   name: borg-apikeys
