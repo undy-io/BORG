@@ -50,6 +50,28 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
+        "type": {
+          "type": "string",
+          "enum": ["ClusterIP", "NodePort", "LoadBalancer", "ExternalName"]
+        },
+        "labels": {
+          "type": "object",
+          "additionalProperties": { "type": "string" }
+        },
+        "annotations": {
+          "type": "object",
+          "additionalProperties": { "type": "string" }
+        },
+        "loadBalancerClass": { "type": "string" },
+        "loadBalancerIP": { "type": "string" },
+        "loadBalancerSourceRanges": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "externalTrafficPolicy": {
+          "type": "string",
+          "enum": ["Cluster", "Local"]
+        },
         "port":       { "type": "integer", "minimum": 1, "maximum": 65535 },
         "targetPort": { "type": "integer", "minimum": 1, "maximum": 65535 }
       },

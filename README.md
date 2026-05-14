@@ -152,6 +152,25 @@ Key values
 | `ingress.hosts`    | DNS names served                              | `[]`                   |
 | `config`           | Inline proxy config (overrides `config.yaml`) | `{}`                   |
 
+For direct Service exposure with Cilium LB IPAM, disable Ingress and set the
+Service to `LoadBalancer`. Cilium pools can be selected by matching Service
+labels from the pool's `serviceSelector`; a specific IP can be requested with
+`lbipam.cilium.io/ips`.
+
+```yaml
+ingress:
+  enabled: false
+
+service:
+  type: LoadBalancer
+  labels:
+    cilium.io/lb-pool: apps
+  annotations:
+    lbipam.cilium.io/ips: 192.0.2.50
+  port: 80
+  targetPort: 8000
+```
+
 ---
 
 ## 🔐 Token generation

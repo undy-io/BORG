@@ -58,5 +58,14 @@ ingress:
     secretName: ""
 
 service:
+  type: ClusterIP
+  labels: {}
+  annotations: {}
+  # loadBalancerClass: io.cilium/l2-announcer
+  # loadBalancerIP is legacy but still supported by Cilium LB IPAM.
+  # Prefer the lbipam.cilium.io/ips annotation for requested IPs.
+  # loadBalancerIP: ""
+  loadBalancerSourceRanges: []
+  # externalTrafficPolicy: Cluster
   port: 80
   targetPort: 8000
