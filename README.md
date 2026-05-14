@@ -115,6 +115,32 @@ helm show values charts/borg > my-values.yaml
 helm upgrade --install borg charts/borg -f my-values.yaml
 ```
 
+### Published Helm repository
+
+Release builds can publish the chart as a GitHub Pages Helm repository for
+Rancher or other catalog consumers:
+
+```bash
+helm repo add borg https://undy-io.github.io/BORG
+helm repo update
+helm upgrade --install borg borg/borg -n borg --create-namespace
+```
+
+In Rancher, add a chart repository with this URL:
+
+```text
+https://undy-io.github.io/BORG
+```
+
+The publishing workflow releases chart versions from `charts/borg/Chart.yaml`.
+When changing the chart for a new Rancher-visible release, bump
+`version` and usually `appVersion` before merging to `master`.
+
+One-time GitHub repository setup is required before the first release:
+create or allow the `gh-pages` branch, then enable GitHub Pages from that branch
+in repository settings. The generated `index.yaml` lives on `gh-pages`, not on
+`master`.
+
 Key values
 
 | Parameter          | Description                                   | Default                |
