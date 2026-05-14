@@ -3,7 +3,7 @@ replicaCount: 2
 image:
   # Go BORG runtime image. The chart no longer runs the Python service by default.
   repository: ghcr.io/undy-io/borg
-  tag: edge
+  tag: "0.1.0"
   pullPolicy: IfNotPresent
 
 authKeySecret:

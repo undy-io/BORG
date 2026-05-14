@@ -2,11 +2,8 @@ name: Release Helm Chart Repository
 
 on:
   push:
-    branches:
-      - master
-    paths:
-      - 'charts/**'
-      - '.github/workflows/helm-release.yml'
+    tags:
+      - 'v*.*.*'
   workflow_dispatch:
 
 permissions:
@@ -32,6 +29,16 @@ jobs:
         with:
           version: v3.13.2
 
+      - name: Validate chart version matches release tag
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          chart_version="$(awk '/^version:/ {print $2; exit}' charts/borg/Chart.yaml)"
+          expected_tag="v${chart_version}"
+          if [ "$expected_tag" != "$GITHUB_REF_NAME" ]; then
+            echo "Chart version ${chart_version} does not match release tag ${GITHUB_REF_NAME}"
+            exit 1
+          fi
+
       - name: Package chart
         run: |
           mkdir -p _site
@@ -54,7 +61,7 @@ jobs:
           HTML
 
       - name: Upload Pages artifact
-        uses: actions/upload-pages-artifact@v4
+        uses: actions/upload-pages-artifact@v5
         with:
           path: ./_site
 
@@ -70,4 +77,4 @@ jobs:
     steps:
       - name: Deploy to GitHub Pages
         id: deployment
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@v5

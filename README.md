@@ -132,13 +132,16 @@ In Rancher, add a chart repository with this URL:
 https://undy-io.github.io/BORG
 ```
 
-The publishing workflow packages the chart from `charts/borg/Chart.yaml`,
-generates `index.yaml`, and deploys the static Helm repository through GitHub
-Pages Actions. When changing the chart for a new Rancher-visible release, bump
-`version` and usually `appVersion` before merging to `master`.
+The publishing workflow runs from release tags like `v0.1.0`. It packages the
+chart from `charts/borg/Chart.yaml`, generates `index.yaml`, and deploys the
+static Helm repository through GitHub Pages Actions. When changing the chart for
+a new Rancher-visible release, bump `version`, usually `appVersion`, and the
+default image tag in `charts/borg/values.yaml` before creating the release tag.
 
-One-time GitHub repository setup is required before the first release: enable
-GitHub Pages with `GitHub Actions` as the build and deployment source.
+One-time GitHub repository setup is required before the first release:
+- Enable GitHub Pages with `GitHub Actions` as the build and deployment source.
+- Ensure the `github-pages` environment protection rules allow release tags,
+  for example `v*.*.*`.
 
 Key values
 
