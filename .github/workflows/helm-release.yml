@@ -9,29 +9,65 @@ on:
       - '.github/workflows/helm-release.yml'
   workflow_dispatch:
 
-jobs:
-  release:
-    name: Publish Helm chart repo
-    runs-on: ubuntu-latest
+permissions:
+  contents: read
+  pages: write
+  id-token: write
 
-    permissions:
-      contents: write
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build Helm repo
+    runs-on: ubuntu-latest
 
     steps:
       - name: Checkout repo
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
+        uses: actions/checkout@v5
 
-      - name: Configure Git
+      - name: Set up Helm
+        uses: azure/setup-helm@v5
+        with:
+          version: v3.13.2
+
+      - name: Package chart
         run: |
-          git config user.name "$GITHUB_ACTOR"
-          git config user.email "$GITHUB_ACTOR@users.noreply.github.com"
+          mkdir -p _site
+          helm package ./charts/borg --destination ./_site
+          helm repo index ./_site --url "https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}"
+          cat > ./_site/index.html <<'HTML'
+          <!doctype html>
+          <html lang="en">
+            <head>
+              <meta charset="utf-8">
+              <title>BORG Helm Chart Repository</title>
+            </head>
+            <body>
+              <h1>BORG Helm Chart Repository</h1>
+              <p>Use this URL as a Helm repository:</p>
+              <pre>https://undy-io.github.io/BORG</pre>
+              <p>The Helm index is available at <a href="./index.yaml">index.yaml</a>.</p>
+            </body>
+          </html>
+          HTML
 
-      - name: Run chart-releaser
-        uses: helm/chart-releaser-action@v1.7.0
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v4
         with:
-          charts_dir: charts
-          skip_existing: true
-        env:
-          CR_TOKEN: "${{ secrets.GITHUB_TOKEN }}"
+          path: ./_site
+
+  deploy:
+    name: Deploy Helm repo
+    runs-on: ubuntu-latest
+    needs: build
+
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
