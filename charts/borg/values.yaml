@@ -3,7 +3,7 @@ replicaCount: 2
 image:
   # Go BORG runtime image. The chart no longer runs the Python service by default.
   repository: ghcr.io/undy-io/borg
-  tag: "0.1.1"
+  tag: "0.1.2"
   pullPolicy: IfNotPresent
 
 authKeySecret:
@@ -19,17 +19,25 @@ apikeySecrets:
 config:
   auth_prefix: "BORG:"
   update_interval: 30
-  instances:
-#    - endpoint: http://10.0.0.5:8000
-#      apikeyEnv: VLLM_APIKEY_1
-#      models: ["gpt-3.5-turbo"]
+  instances: []
+  # - endpoint: http://10.0.0.5:8000
+  #   apikeyEnv: VLLM_APIKEY_1
+  #   models: ["gpt-3.5-turbo"]
   k8s_discover:
     - namespace: vllm-services
       selector: borg/expose=default
       modelkey: borg/models
 
+server:
+  tls:
+    enabled: false
+    secretName: ""
+    mountPath: /app/tls
+    certKey: tls.crt
+    privateKeyKey: tls.key
+
 ingress:
-  enabled: true
+  enabled: false
   className: "nginx"
   issuer:
     name: pkirules-tls
@@ -40,7 +48,7 @@ ingress:
     cert:
       enabled: true
       subject:
-        #commonName: 
+        #commonName:
         organizations: []
         organizationalUnits: []
         countries: []
@@ -56,6 +64,34 @@ ingress:
     enabled: true
     existingSecret: null
     secretName: ""
+
+certificate:
+  # Set enabled=true to create a cert-manager Certificate independently of Ingress.
+  enabled: false
+  labels: {}
+  annotations: {}
+  secretName: ""
+  commonName: ""
+  dnsNames: []
+  # altNames is kept as a friendly alias for additional DNS SANs.
+  altNames: []
+  ipAddresses: []
+  uris: []
+  emailAddresses: []
+  issuerRef:
+    name: ""
+    kind: Issuer
+    group: cert-manager.io
+  usages: []
+  subject:
+    organizations: []
+    organizationalUnits: []
+    countries: []
+    localities: []
+    provinces: []
+    streetAddresses: []
+    postalCodes: []
+    serialNumber: ""
 
 service:
   type: ClusterIP

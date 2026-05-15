@@ -20,17 +20,34 @@ import (
 
 const defaultShutdownTimeout = 30 * time.Second
 
+const (
+	tlsCertFileEnv = "TLS_CERT_FILE"
+	tlsKeyFileEnv  = "TLS_KEY_FILE"
+)
+
 type serverRunner struct {
 	listenAndServe func() error
 	shutdown       func(context.Context) error
 	close          func() error
 	timeout        time.Duration
+	scheme         string
+}
+
+type tlsFiles struct {
+	certFile string
+	keyFile  string
+}
+
+func (t tlsFiles) enabled() bool {
+	return t.certFile != "" && t.keyFile != ""
 }
 
 func main() {
 	var configPathFlag string
 	var hostFlag string
 	var portFlag string
+	var tlsCertFileFlag string
+	var tlsKeyFileFlag string
 	var reloadFlag bool
 
 	flags := flag.NewFlagSet(os.Args[0], flag.ExitOnError)
@@ -38,6 +55,8 @@ func main() {
 	flags.StringVar(&configPathFlag, "c", "", "Path to YAML/JSON file containing config.")
 	flags.StringVar(&hostFlag, "host", "", "Bind address (default: 0.0.0.0)")
 	flags.StringVar(&portFlag, "port", "", "Port to bind (default: PORT env var or 8000)")
+	flags.StringVar(&tlsCertFileFlag, "tls-cert-file", "", "Path to TLS certificate file (default: TLS_CERT_FILE env var)")
+	flags.StringVar(&tlsKeyFileFlag, "tls-key-file", "", "Path to TLS private key file (default: TLS_KEY_FILE env var)")
 	flags.BoolVar(&reloadFlag, "reload", false, "Accepted for Python CLI compatibility; no-op in Go.")
 
 	if err := flags.Parse(os.Args[1:]); err != nil {
@@ -58,6 +77,10 @@ func main() {
 		log.Fatal(err)
 	}
 	host := config.ResolveHost(hostFlag)
+	tlsConfig, err := resolveTLSFiles(tlsCertFileFlag, tlsKeyFileFlag)
+	if err != nil {
+		log.Fatal(err)
+	}
 
 	borgApp, err := app.New(configPath)
 	if err != nil {
@@ -71,16 +94,52 @@ func main() {
 		Handler:           borgApp.Handler,
 		ReadHeaderTimeout: 10 * time.Second,
 	}
+	runner, err := newServerRunner(server, tlsConfig)
+	if err != nil {
+		log.Fatal(err)
+	}
 
-	log.Printf("BORG Go proxy listening on %s", fmt.Sprintf("http://%s", addr))
-	if err := runHTTPServer(ctx, serverRunner{
+	log.Printf("BORG Go proxy listening on %s", fmt.Sprintf("%s://%s", runner.scheme, addr))
+	if err := runHTTPServer(ctx, runner); err != nil {
+		log.Fatal(err)
+	}
+}
+
+func resolveTLSFiles(certFileFlag string, keyFileFlag string) (tlsFiles, error) {
+	certFile := certFileFlag
+	if certFile == "" {
+		certFile = os.Getenv(tlsCertFileEnv)
+	}
+	keyFile := keyFileFlag
+	if keyFile == "" {
+		keyFile = os.Getenv(tlsKeyFileEnv)
+	}
+	if (certFile == "") != (keyFile == "") {
+		return tlsFiles{}, fmt.Errorf("both --tls-cert-file/%s and --tls-key-file/%s must be set to enable TLS", tlsCertFileEnv, tlsKeyFileEnv)
+	}
+	return tlsFiles{certFile: certFile, keyFile: keyFile}, nil
+}
+
+func newServerRunner(server *http.Server, tlsConfig tlsFiles) (serverRunner, error) {
+	runner := serverRunner{
 		listenAndServe: server.ListenAndServe,
 		shutdown:       server.Shutdown,
 		close:          server.Close,
 		timeout:        defaultShutdownTimeout,
-	}); err != nil {
-		log.Fatal(err)
+		scheme:         "http",
 	}
+	if tlsConfig.enabled() {
+		tlsServerConfig, err := newReloadingTLSConfig(tlsConfig)
+		if err != nil {
+			return serverRunner{}, err
+		}
+		server.TLSConfig = tlsServerConfig
+		runner.listenAndServe = func() error {
+			return server.ListenAndServeTLS("", "")
+		}
+		runner.scheme = "https"
+	}
+	return runner, nil
 }
 
 func runHTTPServer(ctx context.Context, runner serverRunner) error {

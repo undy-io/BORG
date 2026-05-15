@@ -46,6 +46,26 @@
       "additionalProperties": true
     },
 
+    "server": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "tls": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "secretName": { "type": "string" },
+            "mountPath": { "type": "string" },
+            "certKey": { "type": "string" },
+            "privateKeyKey": { "type": "string" }
+          },
+          "required": ["enabled", "mountPath", "certKey", "privateKeyKey"]
+        }
+      },
+      "required": ["tls"]
+    },
+
     "service": {
       "type": "object",
       "additionalProperties": false,
@@ -181,6 +201,71 @@
       },
 
       "required": ["enabled", "hosts"]
+    },
+
+    "certificate": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "labels": {
+          "type": "object",
+          "additionalProperties": { "type": "string" }
+        },
+        "annotations": {
+          "type": "object",
+          "additionalProperties": { "type": "string" }
+        },
+        "secretName": { "type": "string" },
+        "commonName": { "type": "string" },
+        "dnsNames": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "altNames": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "ipAddresses": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "uris": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "emailAddresses": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "issuerRef": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "name": { "type": "string" },
+            "kind": { "type": "string" },
+            "group": { "type": "string" }
+          }
+        },
+        "usages": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "subject": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "organizations":       { "type": "array", "items": { "type": "string" } },
+            "organizationalUnits": { "type": "array", "items": { "type": "string" } },
+            "countries":           { "type": "array", "items": { "type": "string", "minLength": 2, "maxLength": 2 } },
+            "localities":          { "type": "array", "items": { "type": "string" } },
+            "provinces":           { "type": "array", "items": { "type": "string" } },
+            "streetAddresses":     { "type": "array", "items": { "type": "string" } },
+            "postalCodes":         { "type": "array", "items": { "type": "string" } },
+            "serialNumber":        { "type": "string" }
+          }
+        }
+      }
     }
   }
 }

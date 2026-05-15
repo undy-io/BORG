@@ -1,3 +1,9 @@
+{{- if and .Values.server.tls.enabled (not .Values.certificate.enabled) (not .Values.server.tls.secretName) -}}
+{{- fail "server.tls.secretName must be set when server.tls.enabled=true and certificate.enabled=false" -}}
+{{- end -}}
+{{- $serverTLS := .Values.server.tls.enabled -}}
+{{- $portName := ternary "https" "http" $serverTLS -}}
+{{- $probeScheme := ternary "HTTPS" "HTTP" $serverTLS -}}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -26,7 +32,7 @@ spec:
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           ports:
-            - name: http
+            - name: {{ $portName }}
               containerPort: {{ .Values.service.targetPort }}
               protocol: TCP
           env:
@@ -39,6 +45,12 @@ spec:
                 secretKeyRef:
                   name: {{ .Values.authKeySecret.name }}
                   key: {{ .Values.authKeySecret.key }}
+            {{- if $serverTLS }}
+            - name: TLS_CERT_FILE
+              value: {{ printf "%s/%s" .Values.server.tls.mountPath .Values.server.tls.certKey | quote }}
+            - name: TLS_KEY_FILE
+              value: {{ printf "%s/%s" .Values.server.tls.mountPath .Values.server.tls.privateKeyKey | quote }}
+            {{- end }}
             {{- range .Values.config.instances }}
             {{- if .apikeyEnv }}
             - name: {{ .apikeyEnv }}
@@ -52,19 +64,36 @@ spec:
             - name: config-volume
               mountPath: /app/config.yaml
               subPath: config.yaml
+            {{- if $serverTLS }}
+            - name: tls-volume
+              mountPath: {{ .Values.server.tls.mountPath }}
+              readOnly: true
+            {{- end }}
           livenessProbe:
             httpGet:
               path: /
               port: {{ .Values.service.targetPort }}
+              scheme: {{ $probeScheme }}
             initialDelaySeconds: 5
             periodSeconds: 10
           readinessProbe:
             httpGet:
               path: /
               port: {{ .Values.service.targetPort }}
+              scheme: {{ $probeScheme }}
             initialDelaySeconds: 2
             periodSeconds: 5
       volumes:
         - name: config-volume
           configMap:
             name: {{ include "borg.fullname" . }}-config
+        {{- if $serverTLS }}
+        - name: tls-volume
+          secret:
+            secretName: {{ include "borg.serverTLSSecretName" . }}
+            items:
+              - key: {{ .Values.server.tls.certKey }}
+                path: {{ .Values.server.tls.certKey }}
+              - key: {{ .Values.server.tls.privateKeyKey }}
+                path: {{ .Values.server.tls.privateKeyKey }}
+        {{- end }}

@@ -1,72 +1,152 @@
-{{- if and .Values.ingress.enabled
-           .Values.ingress.tls.enabled
-           (.Capabilities.APIVersions.Has "cert-manager.io/v1") }}
+{{- $legacyIngressCert := and .Values.ingress.enabled
+                             .Values.ingress.tls.enabled
+                             .Values.ingress.issuer.cert.enabled
+                             (not .Values.ingress.tls.existingSecret)
+                             (.Capabilities.APIVersions.Has "cert-manager.io/v1") -}}
+{{- $standaloneCert := .Values.certificate.enabled -}}
+{{- if or $standaloneCert $legacyIngressCert }}
 
-{{- if .Values.ingress.enabled }}
+{{- $secretName := "" -}}
+{{- $commonName := "" -}}
+{{- $dnsNames := list -}}
+{{- $issuerName := "" -}}
+{{- $issuerKind := "Issuer" -}}
+{{- $issuerGroup := "" -}}
+{{- $annotations := dict -}}
+{{- $labels := dict -}}
+{{- $subject := dict -}}
+{{- $usages := list -}}
+{{- $ipAddresses := list -}}
+{{- $uris := list -}}
+{{- $emailAddresses := list -}}
 
-{{- $hosts := list }}
-{{- range .Values.ingress.hosts }}
-  {{- $hosts = append $hosts .host }}
+{{- if $standaloneCert }}
+  {{- $secretName = include "borg.certificateSecretName" . -}}
+  {{- $issuerName = required "certificate.issuerRef.name must be set when certificate.enabled=true" .Values.certificate.issuerRef.name -}}
+  {{- $issuerKind = default "Issuer" .Values.certificate.issuerRef.kind -}}
+  {{- $issuerGroup = default "" .Values.certificate.issuerRef.group -}}
+  {{- $commonName = default "" .Values.certificate.commonName -}}
+  {{- $annotations = default dict .Values.certificate.annotations -}}
+  {{- $labels = default dict .Values.certificate.labels -}}
+  {{- $subject = default dict .Values.certificate.subject -}}
+  {{- $usages = default list .Values.certificate.usages -}}
+  {{- $ipAddresses = default list .Values.certificate.ipAddresses -}}
+  {{- $uris = default list .Values.certificate.uris -}}
+  {{- $emailAddresses = default list .Values.certificate.emailAddresses -}}
+  {{- range .Values.certificate.dnsNames }}
+    {{- if not (has . $dnsNames) }}
+      {{- $dnsNames = append $dnsNames . -}}
+    {{- end }}
+  {{- end }}
+  {{- range .Values.certificate.altNames }}
+    {{- if not (has . $dnsNames) }}
+      {{- $dnsNames = append $dnsNames . -}}
+    {{- end }}
+  {{- end }}
+{{- else }}
+  {{- $secretName = include "borg.ingressTLSSecretName" . -}}
+  {{- $hosts := list -}}
+  {{- range .Values.ingress.hosts }}
+    {{- $hosts = append $hosts .host -}}
+  {{- end }}
+  {{- $commonName = .Values.ingress.issuer.cert.subject.commonName | default (first $hosts) -}}
+  {{- $issuerName = required "ingress.issuer.name must be set when ingress TLS certificate generation is enabled" .Values.ingress.issuer.name -}}
+  {{- $issuerKind = default "Issuer" .Values.ingress.issuer.kind -}}
+  {{- $subject = default dict .Values.ingress.issuer.cert.subject -}}
+  {{- range .Values.ingress.hosts }}
+    {{- if not (has .host $dnsNames) }}
+      {{- $dnsNames = append $dnsNames .host -}}
+    {{- end }}
+  {{- end }}
+  {{- range .Values.ingress.issuer.cert.altNames }}
+    {{- if not (has . $dnsNames) }}
+      {{- $dnsNames = append $dnsNames . -}}
+    {{- end }}
+  {{- end }}
 {{- end }}
 
-{{- $cn := .Values.ingress.issuer.cert.subject.commonName | default (first $hosts) }}
-{{- $san := list }}
-
-{{/* Add all ingress TLS hosts to the SAN list */}}
-{{- range .Values.ingress.hosts }}
-  {{- $san = append $san .host }}
-{{- end }}
-
-{{/* Add explicitly declared altNames */}}
-{{- range .Values.ingress.issuer.cert.altNames }}
-  {{- $san = append $san . }}
-{{- end }}
-
-{{/* Add commonName if not already in the list */}}
-{{- if and $cn (not (has $cn $san)) }}
-  {{- $san = append $san $cn }}
+{{- if and $commonName (not (has $commonName $dnsNames)) }}
+  {{- $dnsNames = append $dnsNames $commonName -}}
 {{- end }}
 
 apiVersion: cert-manager.io/v1
 kind: Certificate
 metadata:
-  name: {{ include "borg.tlsSecretName" . }}
+  name: {{ $secretName }}
   namespace: {{ .Release.Namespace }}
-spec:
-  secretName: {{ include "borg.tlsSecretName" . }}
-  issuerRef:
-    name: {{ .Values.ingress.issuer.name }}
-    kind: {{ .Values.ingress.issuer.kind | default "Issuer" }}
-  {{- if $cn }}
-  commonName: {{ $cn }}
+  {{- with $labels }}
+  labels:
+{{ toYaml . | indent 4 }}
   {{- end }}
+  {{- with $annotations }}
+  annotations:
+{{ toYaml . | indent 4 }}
+  {{- end }}
+spec:
+  secretName: {{ $secretName }}
+  issuerRef:
+    name: {{ $issuerName }}
+    kind: {{ $issuerKind | default "Issuer" }}
+    {{- if $issuerGroup }}
+    group: {{ $issuerGroup }}
+    {{- end }}
+  {{- if $commonName }}
+  commonName: {{ $commonName }}
+  {{- end }}
+  {{- if $dnsNames }}
   dnsNames:
-    {{- range $san }}
+    {{- range $dnsNames }}
     - {{ . }}
     {{- end }}
-  {{- with .Values.ingress.issuer.cert.subject }}
+  {{- end }}
+  {{- with $ipAddresses }}
+  ipAddresses:
+{{ toYaml . | indent 4 }}
+  {{- end }}
+  {{- with $uris }}
+  uris:
+{{ toYaml . | indent 4 }}
+  {{- end }}
+  {{- with $emailAddresses }}
+  emailAddresses:
+{{ toYaml . | indent 4 }}
+  {{- end }}
+  {{- with $usages }}
+  usages:
+{{ toYaml . | indent 4 }}
+  {{- end }}
+  {{- if or $subject.organizations $subject.organizationalUnits $subject.countries $subject.localities $subject.provinces $subject.streetAddresses $subject.postalCodes $subject.serialNumber }}
   subject:
-    {{- if .organizations }}
+    {{- if $subject.organizations }}
     organizations:
-      {{- toYaml .organizations | nindent 6 }}
+{{ toYaml $subject.organizations | indent 6 }}
     {{- end }}
-    {{- if .organizationalUnits }}
+    {{- if $subject.organizationalUnits }}
     organizationalUnits:
-      {{- toYaml .organizationalUnits | nindent 6 }}
+{{ toYaml $subject.organizationalUnits | indent 6 }}
     {{- end }}
-    {{- if .countries }}
+    {{- if $subject.countries }}
     countries:
-      {{- toYaml .countries | nindent 6 }}
+{{ toYaml $subject.countries | indent 6 }}
     {{- end }}
-    {{- if .localities }}
+    {{- if $subject.localities }}
     localities:
-      {{- toYaml .localities | nindent 6 }}
+{{ toYaml $subject.localities | indent 6 }}
     {{- end }}
-    {{- if .provinces }}
+    {{- if $subject.provinces }}
     provinces:
-      {{- toYaml .provinces | nindent 6 }}
+{{ toYaml $subject.provinces | indent 6 }}
+    {{- end }}
+    {{- if $subject.streetAddresses }}
+    streetAddresses:
+{{ toYaml $subject.streetAddresses | indent 6 }}
+    {{- end }}
+    {{- if $subject.postalCodes }}
+    postalCodes:
+{{ toYaml $subject.postalCodes | indent 6 }}
+    {{- end }}
+    {{- if $subject.serialNumber }}
+    serialNumber: {{ $subject.serialNumber }}
     {{- end }}
   {{- end }}
 {{- end }}
-
-{{- end}}

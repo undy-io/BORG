@@ -10,7 +10,14 @@ data:
       auth_prefix: "{{ .Values.config.auth_prefix }}"
       update_interval: {{ .Values.config.update_interval }}
       instances:
+{{- if .Values.config.instances }}
 {{ toYaml .Values.config.instances | indent 8 }}
+{{- else }}
+        []
+{{- end }}
       k8s_discover:
+{{- if .Values.config.k8s_discover }}
 {{ toYaml .Values.config.k8s_discover | indent 8 }}
-
+{{- else }}
+        []
+{{- end }}

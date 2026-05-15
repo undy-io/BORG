@@ -132,7 +132,7 @@ In Rancher, add a chart repository with this URL:
 https://undy-io.github.io/BORG
 ```
 
-The publishing workflow runs from release tags like `v0.1.0`. It packages the
+The publishing workflow runs from release tags like `v0.1.2`. It packages the
 chart from `charts/borg/Chart.yaml`, generates `index.yaml`, and deploys the
 static Helm repository through GitHub Pages Actions. When changing the chart for
 a new Rancher-visible release, bump `version`, usually `appVersion`, and the
@@ -145,12 +145,15 @@ One-time GitHub repository setup is required before the first release:
 
 Key values
 
-| Parameter          | Description                                   | Default                |
-| ------------------ | --------------------------------------------- | ---------------------- |
-| `image.repository` | Image to run                                  | `ghcr.io/undy-io/borg` |
-| `ingress.enabled`  | Expose via Ingress‑NGINX                      | `true`                 |
-| `ingress.hosts`    | DNS names served                              | `[]`                   |
-| `config`           | Inline proxy config (overrides `config.yaml`) | `{}`                   |
+| Parameter            | Description                         | Default                |
+| -------------------- | ----------------------------------- | ---------------------- |
+| `image.repository`   | Image to run                        | `ghcr.io/undy-io/borg` |
+| `service.type`       | Kubernetes Service type             | `ClusterIP`            |
+| `ingress.enabled`    | Expose via Ingress                  | `false`                |
+| `ingress.hosts`      | DNS names served by Ingress         | `borg.example.com`     |
+| `certificate.enabled`| Create a cert-manager Certificate   | `false`                |
+| `server.tls.enabled` | Serve HTTPS directly from TLS secret| `false`                |
+| `config`             | Inline proxy runtime config         | See `values.yaml`      |
 
 For direct Service exposure with Cilium LB IPAM, disable Ingress and set the
 Service to `LoadBalancer`. Cilium pools can be selected by matching Service
@@ -170,6 +173,55 @@ service:
   port: 80
   targetPort: 8000
 ```
+
+To serve HTTPS directly from that LoadBalancer, enable native server TLS and
+have cert-manager create the Secret. This is useful with custom issuers such as
+EJBCA-backed `ClusterIssuer` resources.
+
+```yaml
+ingress:
+  enabled: false
+
+service:
+  type: LoadBalancer
+  labels:
+    cilium.io/lb-pool: apps
+  annotations:
+    lbipam.cilium.io/ips: 192.0.2.50
+  port: 443
+  targetPort: 8000
+
+certificate:
+  enabled: true
+  secretName: borg-tls
+  commonName: borg.example.com
+  dnsNames:
+    - borg.example.com
+  issuerRef:
+    group: ejbca-issuer.keyfactor.com
+    kind: ClusterIssuer
+    name: clusterissuer-pkirules
+  usages:
+    - digital signature
+    - key encipherment
+  annotations: {}
+  subject:
+    organizations: []
+    organizationalUnits: []
+    countries: []
+    localities: []
+    provinces: []
+
+server:
+  tls:
+    enabled: true
+```
+
+`server.tls.enabled=true` mounts the TLS Secret into the BORG pod and starts the
+Go server with `TLS_CERT_FILE` and `TLS_KEY_FILE`. BORG reloads the mounted cert
+and key after Kubernetes updates the Secret volume, so cert-manager renewals do
+not require a pod restart. If you only want cert-manager to create a Secret for
+another TLS terminator, leave `server.tls.enabled=false`.
 
 ---
 

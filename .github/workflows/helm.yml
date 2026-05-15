@@ -4,11 +4,13 @@ on:
   push:
     paths:
       - 'charts/**'
+      - 'scripts/validate-helm-chart.sh'
       - '.github/workflows/helm.yml'
       - '.helmignore'
   pull_request:
     paths:
       - 'charts/**'
+      - 'scripts/validate-helm-chart.sh'
       - '.github/workflows/helm.yml'
       - '.helmignore'
   workflow_dispatch:
@@ -27,11 +29,8 @@ jobs:
         with:
           version: v3.13.2
 
-      - name: Lint Helm chart
-        run: helm lint ./charts/borg
-
-      - name: Validate templates
-        run: helm template borg-dev ./charts/borg --debug
+      - name: Validate Helm chart
+        run: bash scripts/validate-helm-chart.sh
 
       - name: Package chart
         run: |

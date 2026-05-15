@@ -10,6 +10,14 @@
 {{- printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" -}}
 {{- end }}
 
-{{- define "borg.tlsSecretName" -}}
+{{- define "borg.ingressTLSSecretName" -}}
 {{- default (printf "%s-tls" .Release.Name) .Values.ingress.tls.secretName -}}
+{{- end -}}
+
+{{- define "borg.certificateSecretName" -}}
+{{- default (printf "%s-tls" .Release.Name) .Values.certificate.secretName -}}
+{{- end -}}
+
+{{- define "borg.serverTLSSecretName" -}}
+{{- default (include "borg.certificateSecretName" .) .Values.server.tls.secretName -}}
 {{- end -}}

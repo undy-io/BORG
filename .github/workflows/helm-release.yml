@@ -39,6 +39,9 @@ jobs:
             exit 1
           fi
 
+      - name: Validate Helm chart
+        run: bash scripts/validate-helm-chart.sh
+
       - name: Package chart
         run: |
           mkdir -p _site
