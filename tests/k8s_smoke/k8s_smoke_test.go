@@ -502,8 +502,14 @@ type podMetadata struct {
 }
 
 type podStatus struct {
-	Phase string `json:"phase"`
-	PodIP string `json:"podIP"`
+	Phase      string         `json:"phase"`
+	PodIP      string         `json:"podIP"`
+	Conditions []podCondition `json:"conditions"`
+}
+
+type podCondition struct {
+	Type   string `json:"type"`
+	Status string `json:"status"`
 }
 
 func newPod(name string, namespace string, podIP string, labels map[string]string, annotations map[string]string) pod {
@@ -519,6 +525,9 @@ func newPod(name string, namespace string, podIP string, labels map[string]strin
 		Status: podStatus{
 			Phase: "Running",
 			PodIP: podIP,
+			Conditions: []podCondition{
+				{Type: "Ready", Status: "True"},
+			},
 		},
 	}
 }

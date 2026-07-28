@@ -21,3 +21,11 @@
 {{- define "borg.serverTLSSecretName" -}}
 {{- default (include "borg.certificateSecretName" .) .Values.server.tls.secretName -}}
 {{- end -}}
+
+{{- define "borg.serviceAccountName" -}}
+{{- default (include "borg.fullname" .) .Values.serviceAccount.name -}}
+{{- end -}}
+
+{{- define "borg.authSecretName" -}}
+{{- default .Values.authKeySecret.name .Values.authKeySecret.existingSecret -}}
+{{- end -}}

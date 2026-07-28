@@ -33,12 +33,22 @@ func (r *roundRobin) remove(url string) {
 }
 
 func (r *roundRobin) pick() (Endpoint, bool) {
+	return r.pickWhere(func(Endpoint) bool { return true })
+}
+
+func (r *roundRobin) pickWhere(eligible func(Endpoint) bool) (Endpoint, bool) {
 	if len(r.endpoints) == 0 {
 		return Endpoint{}, false
 	}
-	endpoint := r.endpoints[r.next]
-	r.next = (r.next + 1) % len(r.endpoints)
-	return endpoint, true
+	for offset := 0; offset < len(r.endpoints); offset++ {
+		idx := (r.next + offset) % len(r.endpoints)
+		endpoint := r.endpoints[idx]
+		if eligible(endpoint) {
+			r.next = (idx + 1) % len(r.endpoints)
+			return endpoint, true
+		}
+	}
+	return Endpoint{}, false
 }
 
 func (r *roundRobin) len() int {

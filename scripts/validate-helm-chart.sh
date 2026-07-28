@@ -36,14 +36,20 @@ assert_not_contains "${work_dir}/borg-default.yaml" '^kind: Ingress$'
 assert_not_contains "${work_dir}/borg-default.yaml" '^kind: Certificate$'
 assert_not_contains "${work_dir}/borg-default.yaml" '^  annotations:$'
 assert_not_contains "${work_dir}/borg-default.yaml" '^stringData:$'
+assert_contains "${work_dir}/borg-default.yaml" '^kind: ClusterRole$'
+assert_contains "${work_dir}/borg-default.yaml" '^kind: ClusterRoleBinding$'
+assert_contains "${work_dir}/borg-default.yaml" 'verbs: \["get", "list"\]'
+assert_not_contains "${work_dir}/borg-default.yaml" '"watch"'
 assert_contains "${work_dir}/borg-default.yaml" '^      instances:$'
 assert_contains "${work_dir}/borg-default.yaml" '^        \[\]$'
+assert_contains "${work_dir}/borg-default.yaml" '^      max_request_body_bytes: 67108864$'
 
 render borg-ingress \
   --api-versions cert-manager.io/v1 \
   --set ingress.enabled=true
 assert_contains "${work_dir}/borg-ingress.yaml" '^kind: Ingress$'
 assert_contains "${work_dir}/borg-ingress.yaml" '^kind: Certificate$'
+assert_contains "${work_dir}/borg-ingress.yaml" '^    nginx.ingress.kubernetes.io/force-ssl-redirect: "true"$'
 assert_contains "${work_dir}/borg-ingress.yaml" '^  tls:$'
 assert_contains "${work_dir}/borg-ingress.yaml" '^    - secretName: borg-ingress-tls$'
 
@@ -54,6 +60,27 @@ render borg-existing-secret \
 assert_contains "${work_dir}/borg-existing-secret.yaml" '^kind: Ingress$'
 assert_not_contains "${work_dir}/borg-existing-secret.yaml" '^kind: Certificate$'
 assert_contains "${work_dir}/borg-existing-secret.yaml" '^    - secretName: my-existing-tls$'
+
+render borg-existing-auth-secret \
+  --set authKeySecret.existingSecret=my-existing-auth
+assert_not_contains "${work_dir}/borg-existing-auth-secret.yaml" '^kind: Secret$'
+assert_contains "${work_dir}/borg-existing-auth-secret.yaml" '^                  name: my-existing-auth$'
+
+render borg-auth-create-disabled \
+  --set authKeySecret.create=false
+assert_not_contains "${work_dir}/borg-auth-create-disabled.yaml" '^kind: Secret$'
+assert_contains "${work_dir}/borg-auth-create-disabled.yaml" '^                  name: borg-auth$'
+
+render borg-namespace-rbac \
+  --set rbac.clusterScoped=false \
+  --set rbac.namespaces[0]=vllm-services \
+  --set serviceAccount.name=custom-sa
+assert_contains "${work_dir}/borg-namespace-rbac.yaml" '^kind: Role$'
+assert_contains "${work_dir}/borg-namespace-rbac.yaml" '^kind: RoleBinding$'
+assert_not_contains "${work_dir}/borg-namespace-rbac.yaml" '^kind: ClusterRole$'
+assert_contains "${work_dir}/borg-namespace-rbac.yaml" '^  namespace: vllm-services$'
+assert_contains "${work_dir}/borg-namespace-rbac.yaml" '^      serviceAccountName: custom-sa$'
+assert_contains "${work_dir}/borg-namespace-rbac.yaml" '^    name: custom-sa$'
 
 render borg-cilium-lb \
   --set ingress.enabled=false \

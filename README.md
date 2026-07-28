@@ -87,8 +87,16 @@ helm upgrade --install borg charts/borg \
 # config.yaml
 borg:
   auth_key: "EMPTY"                # base64‑url 32‑byte AES‑256 key
+  auth_key_from_env: BORG_AUTH_KEY # optional env var containing auth_key
   auth_prefix: "BORG:"             # plaintext prefix embedded in issued bearer tokens
   update_interval: 30               # seconds between K8s discovery passes
+  max_request_body_bytes: 67108864  # 64 MiB request body guard; 0 disables
+
+  backend_health:
+    enabled: true
+    failure_threshold: 3
+    cooldown_seconds: 30
+    eject_on_500: false
 
   # Static back‑ends
   instances:
@@ -153,6 +161,9 @@ Key values
 | `ingress.hosts`      | DNS names served by Ingress         | `borg.example.com`     |
 | `certificate.enabled`| Create a cert-manager Certificate   | `false`                |
 | `server.tls.enabled` | Serve HTTPS directly from TLS secret| `false`                |
+| `authKeySecret.existingSecret` | Use externally managed auth Secret | `""`       |
+| `rbac.clusterScoped` | Use cluster-wide pod discovery RBAC | `true`                 |
+| `resources`          | Container resource requests/limits  | `{}`                   |
 | `config`             | Inline proxy runtime config         | See `values.yaml`      |
 
 For direct Service exposure with Cilium LB IPAM, disable Ingress and set the

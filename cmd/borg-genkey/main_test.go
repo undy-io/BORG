@@ -4,13 +4,17 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"errors"
 	"net/http"
 	"strings"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/kubernetes/fake"
+	ktesting "k8s.io/client-go/testing"
 
 	"github.com/undy-io/BORG/internal/auth"
 	"github.com/undy-io/BORG/internal/config"
@@ -135,6 +139,61 @@ func TestRunErrorsWhenSecretKeyIsMissing(t *testing.T) {
 		t.Fatal("expected missing key error")
 	}
 	if !strings.Contains(err.Error(), `key "MISSING" not found`) {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestRunIgnoresMissingConfigMapOnly(t *testing.T) {
+	key := []byte("dddddddddddddddddddddddddddddddd")
+	client := fake.NewSimpleClientset(
+		&corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{Name: "borg-auth", Namespace: "models"},
+			Data: map[string][]byte{
+				"BORG_AUTH_KEY": key,
+			},
+		},
+	)
+
+	stdout, _ := runGenkey(t, client, options{
+		username:        "erin",
+		namespace:       "models",
+		release:         "borg",
+		keyName:         "BORG_AUTH_KEY",
+		secretSuffix:    defaultSecretSuffix,
+		configMapSuffix: defaultConfigMapSuffix,
+	})
+
+	assertTokenUsername(t, strings.TrimSpace(stdout), key, config.DefaultAuthPrefix, "erin")
+}
+
+func TestRunErrorsWhenConfigMapReadIsForbidden(t *testing.T) {
+	key := []byte("eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee")
+	client := fake.NewSimpleClientset(
+		&corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{Name: "borg-auth", Namespace: "models"},
+			Data: map[string][]byte{
+				"BORG_AUTH_KEY": key,
+			},
+		},
+	)
+	client.Fake.PrependReactor("get", "configmaps", func(ktesting.Action) (bool, runtime.Object, error) {
+		return true, nil, apierrors.NewForbidden(corev1.Resource("configmaps"), "borg-config", errors.New("no access"))
+	})
+
+	var stdout, stderr bytes.Buffer
+	err := run(context.Background(), client, options{
+		username:        "frank",
+		namespace:       "models",
+		release:         "borg",
+		keyName:         "BORG_AUTH_KEY",
+		secretSuffix:    defaultSecretSuffix,
+		configMapSuffix: defaultConfigMapSuffix,
+	}, &stdout, &stderr)
+
+	if err == nil {
+		t.Fatal("expected forbidden ConfigMap read error")
+	}
+	if !strings.Contains(err.Error(), "cannot read ConfigMap") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }

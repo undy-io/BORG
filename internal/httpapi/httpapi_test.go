@@ -86,6 +86,27 @@ func TestProxyBodyValidation(t *testing.T) {
 	}
 }
 
+func TestProxyRejectsOversizedBody(t *testing.T) {
+	_, upstream, _ := newTestHandler(t, false)
+	defer upstream.Close()
+
+	proxyService := proxy.New()
+	proxyService.AddInstance(upstream.URL, "sk-test", []string{"m"})
+	authenticator, err := auth.New("EMPTY", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler := New(authenticator, proxyService, WithMaxRequestBodyBytes(10))
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"m","messages":[]}`))
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("expected 413, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	assertJSONDetail(t, rec.Body.String(), "detail", "Request body too large")
+}
+
 func TestUnknownModel(t *testing.T) {
 	handler, upstream, _ := newTestHandler(t, false)
 	defer upstream.Close()

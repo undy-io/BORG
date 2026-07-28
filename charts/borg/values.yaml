@@ -7,6 +7,8 @@ image:
   pullPolicy: IfNotPresent
 
 authKeySecret:
+  create: true
+  existingSecret: ""
   name: borg-auth
   key: BORG_AUTH_KEY
   # Optional URL-safe auth key string. This should be the printable base64url
@@ -16,9 +18,31 @@ authKeySecret:
 apikeySecrets:
   name: borg-apikeys
 
+serviceAccount:
+  create: true
+  name: ""
+
+rbac:
+  create: true
+  clusterScoped: true
+  namespaces: []
+  extraRules: []
+
+podSecurityContext: {}
+
+securityContext: {}
+
+resources: {}
+
 config:
   auth_prefix: "BORG:"
   update_interval: 30
+  max_request_body_bytes: 67108864
+  backend_health:
+    enabled: true
+    failure_threshold: 3
+    cooldown_seconds: 30
+    eject_on_500: false
   instances: []
   # - endpoint: http://10.0.0.5:8000
   #   apikeyEnv: VLLM_APIKEY_1
@@ -39,12 +63,13 @@ server:
 ingress:
   enabled: false
   className: "nginx"
+  annotations:
+    nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
   issuer:
     name: pkirules-tls
     kind: Issuer  # Could be ClusterIssuer for other environments
     scope: namespaced  # or "cluster" if you ever switch
-    annotations:
-      nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+    annotations: {}
     cert:
       enabled: true
       subject:

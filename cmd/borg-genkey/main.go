@@ -199,7 +199,7 @@ func getConfigInfo(ctx context.Context, client kubernetes.Interface, namespace s
 	name := release + configMapSuffix
 	cm, err := client.CoreV1().ConfigMaps(namespace).Get(ctx, name, metav1.GetOptions{})
 	if err != nil {
-		if _, ok := err.(*apierrors.StatusError); ok {
+		if apierrors.IsNotFound(err) {
 			return configInfo{}, nil
 		}
 		return configInfo{}, fmt.Errorf("[generate_key] cannot read ConfigMap %q in namespace %q: %w", name, namespace, err)

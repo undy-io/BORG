@@ -51,6 +51,12 @@ func TestDiscoverRunningPodsProduceEndpoints(t *testing.T) {
 }
 
 func TestDiscoverSkipsIneligiblePods(t *testing.T) {
+	deleting := testPod("deleting", "default", corev1.PodRunning, "10.0.0.4", map[string]string{
+		"borg/models": "delta",
+	}, nil)
+	now := metav1.Now()
+	deleting.DeletionTimestamp = &now
+
 	client := fake.NewSimpleClientset(
 		testPod("pending", "default", corev1.PodPending, "10.0.0.1", map[string]string{
 			"borg/models": "alpha",
@@ -62,6 +68,10 @@ func TestDiscoverSkipsIneligiblePods(t *testing.T) {
 		testPod("no-models", "default", corev1.PodRunning, "10.0.0.3", map[string]string{
 			"borg/models": "",
 		}, nil),
+		notReadyPod(testPod("not-ready", "default", corev1.PodRunning, "10.0.0.4", map[string]string{
+			"borg/models": "gamma",
+		}, nil)),
+		deleting,
 	)
 	service := NewWithClient([]config.DiscoverySelector{{
 		ModelKey: "borg/models",
@@ -202,7 +212,7 @@ func TestDiscoverAutomodelSuccess(t *testing.T) {
 	}
 }
 
-func TestDiscoverAutomodelFailuresReturnErrors(t *testing.T) {
+func TestDiscoverAutomodelFailuresSkipEndpoints(t *testing.T) {
 	tests := []struct {
 		name    string
 		handler http.HandlerFunc
@@ -234,14 +244,18 @@ func TestDiscoverAutomodelFailuresReturnErrors(t *testing.T) {
 			)
 			service := NewWithClient([]config.DiscoverySelector{{}}, client, WithHTTPClient(server.Client()))
 
-			if _, err := service.Discover(context.Background()); err == nil {
-				t.Fatal("expected automodel error")
+			endpoints, err := service.Discover(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(endpoints) != 0 {
+				t.Fatalf("expected bad automodel endpoint to be skipped, got %#v", endpoints)
 			}
 		})
 	}
 }
 
-func TestDiscoverAutomodelHTTPErrorReturnsError(t *testing.T) {
+func TestDiscoverAutomodelHTTPErrorSkipsEndpoint(t *testing.T) {
 	client := fake.NewSimpleClientset(
 		testPod("model", "default", corev1.PodRunning, "10.0.0.1", map[string]string{
 			"borg/apiport": "8000",
@@ -253,8 +267,47 @@ func TestDiscoverAutomodelHTTPErrorReturnsError(t *testing.T) {
 		}),
 	}))
 
-	if _, err := service.Discover(context.Background()); err == nil {
-		t.Fatal("expected automodel HTTP error")
+	endpoints, err := service.Discover(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(endpoints) != 0 {
+		t.Fatalf("expected failed automodel endpoint to be skipped, got %#v", endpoints)
+	}
+}
+
+func TestDiscoverAutomodelMixedFailuresKeepSuccessfulEndpoints(t *testing.T) {
+	good := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"object":"list","data":[{"id":"alpha"}]}`)
+	}))
+	defer good.Close()
+	bad := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "nope", http.StatusBadGateway)
+	}))
+	defer bad.Close()
+
+	goodHost, goodPort := serverHostPort(t, good.URL)
+	badHost, badPort := serverHostPort(t, bad.URL)
+	client := fake.NewSimpleClientset(
+		testPod("good", "default", corev1.PodRunning, goodHost, map[string]string{
+			"borg/apiport": goodPort,
+		}, nil),
+		testPod("bad", "default", corev1.PodRunning, badHost, map[string]string{
+			"borg/apiport": badPort,
+		}, nil),
+	)
+	service := NewWithClient([]config.DiscoverySelector{{}}, client, WithHTTPClient(good.Client()))
+
+	endpoints, err := service.Discover(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []discovery.Endpoint{
+		{URL: "http://" + goodHost + ":" + goodPort, Models: []string{"alpha"}, APIKey: discovery.DefaultAPIKey},
+	}
+	if !reflect.DeepEqual(endpoints, want) {
+		t.Fatalf("unexpected endpoints\nwant: %#v\n got: %#v", want, endpoints)
 	}
 }
 
@@ -281,8 +334,18 @@ func testPod(name string, namespace string, phase corev1.PodPhase, ip string, an
 		Status: corev1.PodStatus{
 			Phase: phase,
 			PodIP: ip,
+			Conditions: []corev1.PodCondition{
+				{Type: corev1.PodReady, Status: corev1.ConditionTrue},
+			},
 		},
 	}
+}
+
+func notReadyPod(pod *corev1.Pod) *corev1.Pod {
+	pod.Status.Conditions = []corev1.PodCondition{
+		{Type: corev1.PodReady, Status: corev1.ConditionFalse},
+	}
+	return pod
 }
 
 func serverHostPort(t *testing.T, rawURL string) (string, string) {

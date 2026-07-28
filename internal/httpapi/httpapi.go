@@ -12,12 +12,25 @@ import (
 )
 
 type Handler struct {
-	auth  *auth.Authenticator
-	proxy *proxy.Service
+	auth                *auth.Authenticator
+	proxy               *proxy.Service
+	maxRequestBodyBytes int64
 }
 
-func New(authenticator *auth.Authenticator, proxyService *proxy.Service) *Handler {
-	return &Handler{auth: authenticator, proxy: proxyService}
+type Option func(*Handler)
+
+func WithMaxRequestBodyBytes(limit int64) Option {
+	return func(h *Handler) {
+		h.maxRequestBodyBytes = limit
+	}
+}
+
+func New(authenticator *auth.Authenticator, proxyService *proxy.Service, opts ...Option) *Handler {
+	handler := &Handler{auth: authenticator, proxy: proxyService}
+	for _, opt := range opts {
+		opt(handler)
+	}
+	return handler
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -42,8 +55,17 @@ func (h *Handler) handleProxy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rawBody, err := io.ReadAll(r.Body)
+	bodyReader := r.Body
+	if h.maxRequestBodyBytes > 0 {
+		bodyReader = http.MaxBytesReader(w, r.Body, h.maxRequestBodyBytes)
+	}
+	rawBody, err := io.ReadAll(bodyReader)
 	if err != nil {
+		var maxBytesErr *http.MaxBytesError
+		if errors.As(err, &maxBytesErr) {
+			writeDetail(w, http.StatusRequestEntityTooLarge, "Request body too large")
+			return
+		}
 		writeDetail(w, http.StatusBadRequest, "Body must be valid JSON")
 		return
 	}

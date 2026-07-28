@@ -8,7 +8,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func TestRegistryRoundRobinAndModels(t *testing.T) {
@@ -101,6 +103,214 @@ func TestStreamingForwardForcesIdentityEncoding(t *testing.T) {
 	}
 	if got := <-acceptEncoding; got != "identity" {
 		t.Fatalf("expected streaming identity encoding upstream, got %q", got)
+	}
+}
+
+func TestRegularForwardRetriesFailureStatusBeforeWriting(t *testing.T) {
+	var failingHits atomic.Int32
+	failing := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		failingHits.Add(1)
+		http.Error(w, "unavailable", http.StatusServiceUnavailable)
+	}))
+	defer failing.Close()
+
+	ok := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	defer ok.Close()
+
+	service := New(WithBackendHealth(BackendHealthConfig{
+		Enabled:          true,
+		FailureThreshold: 1,
+		Cooldown:         time.Hour,
+	}))
+	service.AddInstance(failing.URL, "sk-fail", []string{"m"})
+	service.AddInstance(ok.URL, "sk-ok", []string{"m"})
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	if err := service.Forward(rec, req, []byte(`{"model":"m"}`), "m", false); err != nil {
+		t.Fatal(err)
+	}
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected retry to healthy endpoint, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if failingHits.Load() != 1 {
+		t.Fatalf("expected failing endpoint to be tried once, got %d", failingHits.Load())
+	}
+
+	rec = httptest.NewRecorder()
+	if err := service.Forward(rec, req, []byte(`{"model":"m"}`), "m", false); err != nil {
+		t.Fatal(err)
+	}
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected unhealthy endpoint to be skipped, got %d", rec.Code)
+	}
+	if failingHits.Load() != 1 {
+		t.Fatalf("expected unhealthy endpoint to remain skipped, got %d hits", failingHits.Load())
+	}
+}
+
+func TestTransportFailureRetriesAndEjectsEndpoint(t *testing.T) {
+	failing := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	failingURL := failing.URL
+	failing.Close()
+
+	ok := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	defer ok.Close()
+
+	service := New(WithBackendHealth(BackendHealthConfig{
+		Enabled:          true,
+		FailureThreshold: 1,
+		Cooldown:         time.Hour,
+	}))
+	service.AddInstance(failingURL, "sk-fail", []string{"m"})
+	service.AddInstance(ok.URL, "sk-ok", []string{"m"})
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	if err := service.Forward(rec, req, []byte(`{"model":"m"}`), "m", false); err != nil {
+		t.Fatal(err)
+	}
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected retry to healthy endpoint, got %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	service.mu.Lock()
+	defer service.mu.Unlock()
+	if health := service.health[failingURL]; health == nil || health.consecutiveFailures == 0 || health.unavailableUntil.IsZero() {
+		t.Fatalf("expected failing endpoint to be quarantined, got %#v", health)
+	}
+}
+
+func TestBackendHealthDoesNotEjectClientOrDefaultServerErrors(t *testing.T) {
+	for _, tt := range []struct {
+		name   string
+		status int
+	}{
+		{name: "client error", status: http.StatusBadRequest},
+		{name: "default server error", status: http.StatusInternalServerError},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				http.Error(w, "status", tt.status)
+			}))
+			defer upstream.Close()
+
+			service := New(WithBackendHealth(BackendHealthConfig{
+				Enabled:          true,
+				FailureThreshold: 1,
+				Cooldown:         time.Hour,
+			}))
+			service.AddInstance(upstream.URL, "sk-test", []string{"m"})
+
+			rec := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+			if err := service.Forward(rec, req, []byte(`{"model":"m"}`), "m", false); err != nil {
+				t.Fatal(err)
+			}
+			if rec.Code != tt.status {
+				t.Fatalf("expected upstream status %d, got %d", tt.status, rec.Code)
+			}
+
+			service.mu.Lock()
+			health := service.health[upstream.URL]
+			service.mu.Unlock()
+			if health == nil {
+				t.Fatal("expected health entry")
+			}
+			if health.consecutiveFailures != 0 || !health.unavailableUntil.IsZero() {
+				t.Fatalf("expected endpoint not to be ejected, got %#v", health)
+			}
+		})
+	}
+}
+
+func TestPickEndpointFallsBackWhenAllEndpointsUnhealthy(t *testing.T) {
+	service := New(WithBackendHealth(BackendHealthConfig{
+		Enabled:          true,
+		FailureThreshold: 1,
+		Cooldown:         time.Hour,
+	}))
+	service.AddInstance("http://e1:8000", "k1", []string{"m"})
+	service.AddInstance("http://e2:8000", "k2", []string{"m"})
+	service.recordFailure("http://e1:8000")
+	service.recordFailure("http://e2:8000")
+
+	endpoint, ok := service.PickEndpoint("m")
+	if !ok {
+		t.Fatal("expected an all-unhealthy fallback endpoint")
+	}
+	if endpoint.URL == "" {
+		t.Fatalf("expected fallback endpoint URL, got %#v", endpoint)
+	}
+}
+
+func TestStreamingRetriesSetupFailureBeforeWriting(t *testing.T) {
+	failing := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "unavailable", http.StatusServiceUnavailable)
+	}))
+	defer failing.Close()
+	ok := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("data: [DONE]\n\n"))
+	}))
+	defer ok.Close()
+
+	service := New(WithBackendHealth(BackendHealthConfig{
+		Enabled:          true,
+		FailureThreshold: 1,
+		Cooldown:         time.Hour,
+	}))
+	service.AddInstance(failing.URL, "sk-fail", []string{"m"})
+	service.AddInstance(ok.URL, "sk-ok", []string{"m"})
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	if err := service.Forward(rec, req, []byte(`{"model":"m","stream":true}`), "m", true); err != nil {
+		t.Fatal(err)
+	}
+	if rec.Code != http.StatusOK || rec.Body.String() != "data: [DONE]\n\n" {
+		t.Fatalf("expected successful retry stream, got status=%d body=%q", rec.Code, rec.Body.String())
+	}
+}
+
+func TestStreamingDoesNotRetryAfterBytesAreWritten(t *testing.T) {
+	var secondHits atomic.Int32
+	partial := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("Content-Length", "100")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("data: partial\n\n"))
+	}))
+	defer partial.Close()
+	second := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		secondHits.Add(1)
+		_, _ = w.Write([]byte("data: second\n\n"))
+	}))
+	defer second.Close()
+
+	service := New(WithBackendHealth(BackendHealthConfig{
+		Enabled:          true,
+		FailureThreshold: 1,
+		Cooldown:         time.Hour,
+	}))
+	service.AddInstance(partial.URL, "sk-partial", []string{"m"})
+	service.AddInstance(second.URL, "sk-second", []string{"m"})
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	if err := service.Forward(rec, req, []byte(`{"model":"m","stream":true}`), "m", true); err != nil {
+		t.Fatal(err)
+	}
+	if rec.Body.String() != "data: partial\n\n" {
+		t.Fatalf("expected partial stream body, got %q", rec.Body.String())
+	}
+	if secondHits.Load() != 0 {
+		t.Fatalf("expected no retry after stream bytes were written, got %d second hits", secondHits.Load())
 	}
 }
 

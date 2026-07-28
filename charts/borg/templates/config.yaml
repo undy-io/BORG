@@ -9,6 +9,9 @@ data:
       auth_key_from_env: {{ .Values.authKeySecret.key }}
       auth_prefix: "{{ .Values.config.auth_prefix }}"
       update_interval: {{ .Values.config.update_interval }}
+      max_request_body_bytes: {{ int64 .Values.config.max_request_body_bytes }}
+      backend_health:
+{{ toYaml .Values.config.backend_health | indent 8 }}
       instances:
 {{- if .Values.config.instances }}
 {{ toYaml .Values.config.instances | indent 8 }}

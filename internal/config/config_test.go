@@ -81,11 +81,56 @@ borg:
 	if runtime.UpdateInterval != 30 {
 		t.Fatalf("expected update interval 30, got %d", runtime.UpdateInterval)
 	}
+	if runtime.MaxRequestBodyBytes != DefaultMaxRequestBodyBytes {
+		t.Fatalf("expected default max request body bytes %d, got %d", DefaultMaxRequestBodyBytes, runtime.MaxRequestBodyBytes)
+	}
+	if !runtime.BackendHealth.Enabled {
+		t.Fatal("expected backend health to default enabled")
+	}
+	if runtime.BackendHealth.FailureThreshold != 3 {
+		t.Fatalf("expected backend health threshold 3, got %d", runtime.BackendHealth.FailureThreshold)
+	}
+	if runtime.BackendHealth.CooldownSeconds != 30 {
+		t.Fatalf("expected backend health cooldown 30, got %d", runtime.BackendHealth.CooldownSeconds)
+	}
 
 	assertInstanceKey(t, runtime.Instances, "http://upstream-one", "sk-env")
 	assertInstanceKey(t, runtime.Instances, "http://upstream-two", "sk-inline")
 	assertInstanceKey(t, runtime.Instances, "http://upstream-three", "sk-default")
 	assertInstanceKey(t, runtime.Instances, "http://upstream-four", "sk-inline-fallback")
+}
+
+func TestRuntimeOptionalDefaultsCanBeOverridden(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	writeFile(t, path, `
+borg:
+  max_request_body_bytes: 0
+  backend_health:
+    enabled: false
+    failure_threshold: 5
+    cooldown_seconds: 7
+    eject_on_500: true
+`)
+
+	runtime, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runtime.MaxRequestBodyBytes != 0 {
+		t.Fatalf("expected unlimited max request body bytes, got %d", runtime.MaxRequestBodyBytes)
+	}
+	if runtime.BackendHealth.Enabled {
+		t.Fatal("expected backend health to be disabled")
+	}
+	if runtime.BackendHealth.FailureThreshold != 5 {
+		t.Fatalf("expected threshold 5, got %d", runtime.BackendHealth.FailureThreshold)
+	}
+	if runtime.BackendHealth.CooldownSeconds != 7 {
+		t.Fatalf("expected cooldown 7, got %d", runtime.BackendHealth.CooldownSeconds)
+	}
+	if !runtime.BackendHealth.EjectOn500 {
+		t.Fatal("expected eject_on_500 to be true")
+	}
 }
 
 func TestBackendAPIKeyDefaultsToEmpty(t *testing.T) {
@@ -142,6 +187,39 @@ func TestLegacyAuthKeyPrecedence(t *testing.T) {
 	}
 	if runtime.AuthKey != legacyKey {
 		t.Fatalf("expected BORG_AUTH_KEY precedence, got %q", runtime.AuthKey)
+	}
+}
+
+func TestAuthKeyFromEnvPrecedence(t *testing.T) {
+	configKey := base64.URLEncoding.EncodeToString([]byte("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"))
+	fromEnvKey := base64.URLEncoding.EncodeToString([]byte("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"))
+	legacyKey := base64.URLEncoding.EncodeToString([]byte("cccccccccccccccccccccccccccccccc"))
+	t.Setenv("CHART_AUTH_KEY", fromEnvKey)
+	t.Setenv(LegacyAuthKeyEnv, legacyKey)
+
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	writeFile(t, path, `
+borg:
+  auth_key_from_env: CHART_AUTH_KEY
+  auth_key: "`+configKey+`"
+`)
+
+	runtime, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runtime.AuthKey != fromEnvKey {
+		t.Fatalf("expected auth_key_from_env precedence, got %q", runtime.AuthKey)
+	}
+
+	authKey := base64.URLEncoding.EncodeToString([]byte("dddddddddddddddddddddddddddddddd"))
+	t.Setenv(AuthKeyEnv, authKey)
+	runtime, err = Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runtime.AuthKey != authKey {
+		t.Fatalf("expected AUTH_KEY to win, got %q", runtime.AuthKey)
 	}
 }
 

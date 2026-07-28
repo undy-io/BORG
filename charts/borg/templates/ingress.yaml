@@ -1,5 +1,8 @@
 {{- if .Values.ingress.enabled }}
 
+{{- $legacyAnnotations := default dict .Values.ingress.issuer.annotations -}}
+{{- $ingressAnnotations := default dict .Values.ingress.annotations -}}
+{{- $annotations := mergeOverwrite (deepCopy $legacyAnnotations) $ingressAnnotations -}}
 {{- $useTLS := and .Values.ingress.tls.enabled
 	                 ( or .Values.ingress.tls.existingSecret
 	                      .Values.ingress.tls.secretName
@@ -11,7 +14,7 @@ kind: Ingress
 metadata:
   name: {{ include "borg.fullname" . }}
   namespace: {{ .Release.Namespace }}
-  {{- with .Values.ingress.annotations }}
+  {{- with $annotations }}
   annotations:
 {{ toYaml . | indent 4 }}
   {{- end }}

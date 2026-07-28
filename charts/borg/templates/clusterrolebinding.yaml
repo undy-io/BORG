@@ -1,3 +1,5 @@
+{{- if .Values.rbac.create }}
+{{- if .Values.rbac.clusterScoped }}
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
@@ -8,5 +10,29 @@ roleRef:
   name: {{ include "borg.fullname" . }}-role
 subjects:
   - kind: ServiceAccount
-    name: {{ include "borg.fullname" . }}
+    name: {{ include "borg.serviceAccountName" . }}
     namespace: {{ .Release.Namespace }}
+{{- else }}
+{{- if not .Values.rbac.namespaces }}
+{{- fail "rbac.namespaces must contain at least one namespace when rbac.clusterScoped=false" }}
+{{- end }}
+{{- range $idx, $namespace := .Values.rbac.namespaces }}
+{{- if $idx }}
+---
+{{- end }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "borg.fullname" $ }}-binding
+  namespace: {{ $namespace }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "borg.fullname" $ }}-role
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "borg.serviceAccountName" $ }}
+    namespace: {{ $.Release.Namespace }}
+{{- end }}
+{{- end }}
+{{- end }}

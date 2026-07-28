@@ -21,6 +21,8 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
+        "create": { "type": "boolean" },
+        "existingSecret": { "type": "string" },
         "name": { "type": "string" },
         "key":  { "type": "string" },
         "value": {
@@ -29,6 +31,49 @@
         }
       },
       "required": ["name", "key"]
+    },
+
+    "serviceAccount": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "create": { "type": "boolean" },
+        "name": { "type": "string" }
+      },
+      "required": ["create", "name"]
+    },
+
+    "rbac": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "create": { "type": "boolean" },
+        "clusterScoped": { "type": "boolean" },
+        "namespaces": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "extraRules": {
+          "type": "array",
+          "items": { "type": "object" }
+        }
+      },
+      "required": ["create", "clusterScoped", "namespaces", "extraRules"]
+    },
+
+    "podSecurityContext": {
+      "type": "object",
+      "additionalProperties": true
+    },
+
+    "securityContext": {
+      "type": "object",
+      "additionalProperties": true
+    },
+
+    "resources": {
+      "type": "object",
+      "additionalProperties": true
     },
 
     "apikeySecrets": {

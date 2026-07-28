@@ -26,11 +26,19 @@ spec:
         app: {{ include "borg.name" . }}
         release: {{ .Release.Name }}
     spec:
-      serviceAccountName: {{ include "borg.fullname" . }}
+      serviceAccountName: {{ include "borg.serviceAccountName" . }}
+      {{- with .Values.podSecurityContext }}
+      securityContext:
+{{ toYaml . | indent 8 }}
+      {{- end }}
       containers:
         - name: borg-proxy
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
+          {{- with .Values.securityContext }}
+          securityContext:
+{{ toYaml . | indent 12 }}
+          {{- end }}
           ports:
             - name: {{ $portName }}
               containerPort: {{ .Values.service.targetPort }}
@@ -40,10 +48,10 @@ spec:
               value: "{{ .Values.service.targetPort }}"
             - name: PROXY_CONFIG
               value: /app/config.yaml
-            - name: AUTH_KEY
+            - name: {{ .Values.authKeySecret.key }}
               valueFrom:
                 secretKeyRef:
-                  name: {{ .Values.authKeySecret.name }}
+                  name: {{ include "borg.authSecretName" . }}
                   key: {{ .Values.authKeySecret.key }}
             {{- if $serverTLS }}
             - name: TLS_CERT_FILE
@@ -83,6 +91,10 @@ spec:
               scheme: {{ $probeScheme }}
             initialDelaySeconds: 2
             periodSeconds: 5
+          {{- with .Values.resources }}
+          resources:
+{{ toYaml . | indent 12 }}
+          {{- end }}
       volumes:
         - name: config-volume
           configMap:

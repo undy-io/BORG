@@ -1,8 +1,15 @@
 # THIS IS AN EXAMPLE CONFIG
 borg:
     auth_key: "EMPTY"
+    # auth_key_from_env: BORG_AUTH_KEY
     auth_prefix: ""
     update_interval: -1
+    max_request_body_bytes: 67108864
+    backend_health:
+      enabled: true
+      failure_threshold: 3
+      cooldown_seconds: 30
+      eject_on_500: false
     instances:
       # - endpoint: "http://10.0.0.5:8000"
       #   apikey: "sk‑examplekey123"

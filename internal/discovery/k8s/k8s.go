@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net"
 	"net/http"
 	"strings"
@@ -133,7 +134,8 @@ func (s *Service) discoverSelector(ctx context.Context, selector config.Discover
 			var err error
 			models, err = s.enumModels(ctx, endpoint)
 			if err != nil {
-				return nil, err
+				log.Printf("Skipping discovered pod %s/%s endpoint %s after model enumeration failed: %v", pod.Namespace, pod.Name, endpoint, err)
+				continue
 			}
 		}
 		if len(models) == 0 {
@@ -154,7 +156,13 @@ func endpointFromPod(pod corev1.Pod) (string, bool) {
 	if pod.Status.Phase != corev1.PodRunning {
 		return "", false
 	}
+	if pod.DeletionTimestamp != nil {
+		return "", false
+	}
 	if pod.Status.PodIP == "" {
+		return "", false
+	}
+	if !podReady(pod) {
 		return "", false
 	}
 	if len(pod.Annotations) == 0 {
@@ -166,6 +174,15 @@ func endpointFromPod(pod corev1.Pod) (string, bool) {
 	apiBase := pod.Annotations["borg/apibase"]
 
 	return fmt.Sprintf("%s://%s%s", protocol, net.JoinHostPort(pod.Status.PodIP, apiPort), apiBase), true
+}
+
+func podReady(pod corev1.Pod) bool {
+	for _, condition := range pod.Status.Conditions {
+		if condition.Type == corev1.PodReady {
+			return condition.Status == corev1.ConditionTrue
+		}
+	}
+	return false
 }
 
 func annotationDefault(annotations map[string]string, key string, fallback string) string {

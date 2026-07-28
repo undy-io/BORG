@@ -12,11 +12,12 @@ import (
 )
 
 const (
-	DefaultConfigPath = "config.yaml"
-	DefaultHost       = "0.0.0.0"
-	DefaultPort       = 8000
-	DefaultKeyValue   = "EMPTY"
-	DefaultAuthPrefix = "PROXY:"
+	DefaultConfigPath                = "config.yaml"
+	DefaultHost                      = "0.0.0.0"
+	DefaultPort                      = 8000
+	DefaultKeyValue                  = "EMPTY"
+	DefaultAuthPrefix                = "PROXY:"
+	DefaultMaxRequestBodyBytes int64 = 64 * 1024 * 1024
 
 	ProxyConfigEnv   = "PROXY_CONFIG"
 	PortEnv          = "PORT"
@@ -30,11 +31,14 @@ type File struct {
 }
 
 type BorgConfig struct {
-	AuthKey        string              `json:"auth_key" yaml:"auth_key"`
-	AuthPrefix     string              `json:"auth_prefix" yaml:"auth_prefix"`
-	Instances      []Instance          `json:"instances" yaml:"instances"`
-	UpdateInterval int                 `json:"update_interval" yaml:"update_interval"`
-	K8SDiscover    []DiscoverySelector `json:"k8s_discover" yaml:"k8s_discover"`
+	AuthKey             string              `json:"auth_key" yaml:"auth_key"`
+	AuthKeyFromEnv      string              `json:"auth_key_from_env" yaml:"auth_key_from_env"`
+	AuthPrefix          string              `json:"auth_prefix" yaml:"auth_prefix"`
+	Instances           []Instance          `json:"instances" yaml:"instances"`
+	UpdateInterval      int                 `json:"update_interval" yaml:"update_interval"`
+	K8SDiscover         []DiscoverySelector `json:"k8s_discover" yaml:"k8s_discover"`
+	BackendHealth       BackendHealthConfig `json:"backend_health" yaml:"backend_health"`
+	MaxRequestBodyBytes *int64              `json:"max_request_body_bytes" yaml:"max_request_body_bytes"`
 }
 
 type Instance struct {
@@ -50,18 +54,34 @@ type DiscoverySelector struct {
 	ModelKey  string `json:"modelkey" yaml:"modelkey"`
 }
 
+type BackendHealthConfig struct {
+	Enabled          *bool `json:"enabled" yaml:"enabled"`
+	FailureThreshold int   `json:"failure_threshold" yaml:"failure_threshold"`
+	CooldownSeconds  int   `json:"cooldown_seconds" yaml:"cooldown_seconds"`
+	EjectOn500       bool  `json:"eject_on_500" yaml:"eject_on_500"`
+}
+
 type Runtime struct {
-	AuthKey        string
-	AuthPrefix     string
-	Instances      []ResolvedInstance
-	UpdateInterval int
-	K8SDiscover    []DiscoverySelector
+	AuthKey             string
+	AuthPrefix          string
+	Instances           []ResolvedInstance
+	UpdateInterval      int
+	K8SDiscover         []DiscoverySelector
+	BackendHealth       ResolvedBackendHealth
+	MaxRequestBodyBytes int64
 }
 
 type ResolvedInstance struct {
 	Endpoint string
 	APIKey   string
 	Models   []string
+}
+
+type ResolvedBackendHealth struct {
+	Enabled          bool
+	FailureThreshold int
+	CooldownSeconds  int
+	EjectOn500       bool
 }
 
 func ResolveConfigPath(flagValue string) string {
@@ -138,10 +158,12 @@ func ResolveRuntime(file *File) (*Runtime, error) {
 
 	borg := file.Borg
 	runtime := &Runtime{
-		AuthKey:        resolveAuthKey(borg.AuthKey),
-		AuthPrefix:     resolveAuthPrefix(borg.AuthPrefix),
-		UpdateInterval: borg.UpdateInterval,
-		K8SDiscover:    append([]DiscoverySelector(nil), borg.K8SDiscover...),
+		AuthKey:             resolveAuthKey(borg.AuthKey, borg.AuthKeyFromEnv),
+		AuthPrefix:          resolveAuthPrefix(borg.AuthPrefix),
+		UpdateInterval:      borg.UpdateInterval,
+		K8SDiscover:         append([]DiscoverySelector(nil), borg.K8SDiscover...),
+		BackendHealth:       resolveBackendHealth(borg.BackendHealth),
+		MaxRequestBodyBytes: resolveMaxRequestBodyBytes(borg.MaxRequestBodyBytes),
 	}
 
 	apiKeyDefault := os.Getenv(APIKeyEnv)
@@ -167,9 +189,14 @@ func ResolveRuntime(file *File) (*Runtime, error) {
 	return runtime, nil
 }
 
-func resolveAuthKey(configValue string) string {
+func resolveAuthKey(configValue string, envName string) string {
 	if value := os.Getenv(AuthKeyEnv); value != "" {
 		return value
+	}
+	if envName != "" {
+		if value := os.Getenv(envName); value != "" {
+			return value
+		}
 	}
 	if value := os.Getenv(LegacyAuthKeyEnv); value != "" {
 		return value
@@ -185,6 +212,40 @@ func resolveAuthPrefix(configValue string) string {
 		return configValue
 	}
 	return DefaultAuthPrefix
+}
+
+func resolveBackendHealth(configValue BackendHealthConfig) ResolvedBackendHealth {
+	enabled := true
+	if configValue.Enabled != nil {
+		enabled = *configValue.Enabled
+	}
+
+	failureThreshold := configValue.FailureThreshold
+	if failureThreshold <= 0 {
+		failureThreshold = 3
+	}
+
+	cooldownSeconds := configValue.CooldownSeconds
+	if cooldownSeconds <= 0 {
+		cooldownSeconds = 30
+	}
+
+	return ResolvedBackendHealth{
+		Enabled:          enabled,
+		FailureThreshold: failureThreshold,
+		CooldownSeconds:  cooldownSeconds,
+		EjectOn500:       configValue.EjectOn500,
+	}
+}
+
+func resolveMaxRequestBodyBytes(configValue *int64) int64 {
+	if configValue == nil {
+		return DefaultMaxRequestBodyBytes
+	}
+	if *configValue < 0 {
+		return DefaultMaxRequestBodyBytes
+	}
+	return *configValue
 }
 
 func resolveInstanceAPIKey(inst Instance, defaultValue string) string {

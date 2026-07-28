@@ -47,7 +47,12 @@ func NewWithOptions(configPath string, opts Options) (*App, error) {
 		return nil, err
 	}
 
-	proxyService := proxy.New()
+	proxyService := proxy.New(proxy.WithBackendHealth(proxy.BackendHealthConfig{
+		Enabled:          runtime.BackendHealth.Enabled,
+		FailureThreshold: runtime.BackendHealth.FailureThreshold,
+		Cooldown:         time.Duration(runtime.BackendHealth.CooldownSeconds) * time.Second,
+		EjectOn500:       runtime.BackendHealth.EjectOn500,
+	}))
 	for _, inst := range runtime.Instances {
 		proxyService.AddInstance(inst.Endpoint, inst.APIKey, inst.Models)
 	}
@@ -56,7 +61,7 @@ func NewWithOptions(configPath string, opts Options) (*App, error) {
 		Config:  runtime,
 		Auth:    authenticator,
 		Proxy:   proxyService,
-		Handler: httpapi.New(authenticator, proxyService),
+		Handler: httpapi.New(authenticator, proxyService, httpapi.WithMaxRequestBodyBytes(runtime.MaxRequestBodyBytes)),
 	}
 	borgApp.startDiscovery(runtime, opts.discoveryFactory())
 
