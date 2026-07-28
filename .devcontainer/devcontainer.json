@@ -10,8 +10,9 @@
   "init": true,
   "features": {
     "ghcr.io/devcontainers/features/github-cli:1": {},
-    "ghcr.io/devcontainers/features/go:1.3.3": {
-      "version": "1.26.2"
+    "ghcr.io/devcontainers/features/go:1": {
+      "version": "1.26.4",
+      "golangciLintVersion": "2.12.1"
     },
     "ghcr.io/devcontainers/features/docker-in-docker:2": {
       "moby": false,
