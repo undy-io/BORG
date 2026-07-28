@@ -61,9 +61,6 @@ func DecodeKeyText(keyText string) ([]byte, error) {
 }
 
 func DecodeSecretKey(secretData []byte) ([]byte, error) {
-	if len(secretData) == 32 {
-		return append([]byte(nil), secretData...), nil
-	}
 	return DecodeKeyText(string(secretData))
 }
 

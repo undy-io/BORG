@@ -23,9 +23,19 @@
 {{- end -}}
 
 {{- define "borg.serviceAccountName" -}}
+{{- if .Values.serviceAccount.create -}}
 {{- default (include "borg.fullname" .) .Values.serviceAccount.name -}}
+{{- else -}}
+{{- default "default" .Values.serviceAccount.name -}}
+{{- end -}}
 {{- end -}}
 
 {{- define "borg.authSecretName" -}}
-{{- default .Values.authKeySecret.name .Values.authKeySecret.existingSecret -}}
+{{- $name := default .Values.authKeySecret.name .Values.authKeySecret.existingSecret -}}
+{{- required "authKeySecret.name or authKeySecret.existingSecret must be set" $name -}}
+{{- end -}}
+
+{{- define "borg.apiKeySecretName" -}}
+{{- $name := default .Values.apikeySecrets.name .Values.apikeySecrets.existingSecret -}}
+{{- required "apikeySecrets.name or apikeySecrets.existingSecret must be set" $name -}}
 {{- end -}}

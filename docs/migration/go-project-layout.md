@@ -81,7 +81,7 @@ Go token utility.
 Responsibilities:
 - preserve AES-256-GCM token compatibility
 - preserve the `auth_prefix + username` plaintext contract
-- support URL-safe printable auth key Secret data and legacy raw key Secret data
+- support URL-safe printable auth key Secret data
 - load local kubeconfig using Kubernetes default loading rules
 - read ConfigMap defaults and auth Secret data using `client-go`
 
@@ -124,7 +124,8 @@ Responsibilities:
 - decrypt bearer tokens
 - enforce auth prefix checks
 - generate tokens for `cmd/borg-genkey`
-- decode auth Secret values from either printable URL-safe key text or legacy raw key bytes
+- decode padded or unpadded printable base64url auth key text from auth Secret
+  values; raw 32-byte Secret payloads are not accepted
 
 ### `internal/httpapi`
 HTTP routes and handlers.

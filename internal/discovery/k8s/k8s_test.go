@@ -4,18 +4,23 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"reflect"
 	"sort"
+	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/kubernetes/fake"
+	"k8s.io/client-go/rest"
 	ktesting "k8s.io/client-go/testing"
 
 	"github.com/undy-io/BORG/internal/config"
@@ -92,7 +97,7 @@ func TestDiscoverAppliesNamespaceAndSelectorDefaults(t *testing.T) {
 			"borg/models": "alpha",
 		}, nil),
 	)
-	client.Fake.PrependReactor("list", "pods", func(action ktesting.Action) (bool, runtime.Object, error) {
+	client.PrependReactor("list", "pods", func(action ktesting.Action) (bool, runtime.Object, error) {
 		listAction := action.(ktesting.ListAction)
 		if listAction.GetNamespace() != defaultNamespace {
 			t.Fatalf("expected default namespace %q, got %q", defaultNamespace, listAction.GetNamespace())
@@ -150,6 +155,325 @@ func TestDiscoverAppliesEndpointAnnotationDefaultsAndOverrides(t *testing.T) {
 	}
 }
 
+func TestDiscoverServicesProduceStableDNSEndpoints(t *testing.T) {
+	client := fake.NewSimpleClientset(
+		testService("model-api", "models", map[string]string{
+			"borg/models": "alpha,beta",
+		}, map[string]string{"app": "vllm"}, 8080),
+		testService("ignored", "models", map[string]string{
+			"borg/models": "gamma",
+		}, map[string]string{"app": "other"}, 8080),
+	)
+	service := NewServiceWithClient(config.ResolvedServiceDiscovery{
+		ID:         "llmd-router",
+		Namespace:  "models",
+		Selector:   "app=vllm",
+		ModelKey:   "borg/models",
+		Automodel:  true,
+		ModelsPath: defaultModelsEP,
+		APIKey:     discovery.DefaultAPIKey,
+	}, client)
+
+	endpoints, err := service.Discover(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []discovery.Endpoint{
+		{URL: "http://model-api.models.svc:8080", Models: []string{"alpha", "beta"}, APIKey: discovery.DefaultAPIKey},
+	}
+	if !reflect.DeepEqual(endpoints, want) {
+		t.Fatalf("unexpected endpoints\nwant: %#v\n got: %#v", want, endpoints)
+	}
+}
+
+func TestDiscoverServiceEndpointAnnotationsOverrideAmbiguousPorts(t *testing.T) {
+	discovered := testService("model-api", "models", map[string]string{
+		"borg/models":   "alpha",
+		"borg/protocol": "https",
+		"borg/apiport":  "9443",
+		"borg/apibase":  "/openai",
+	}, nil, 8080, 9090)
+	client := fake.NewSimpleClientset(discovered)
+	service := NewServiceWithClient(config.ResolvedServiceDiscovery{
+		ID:         "llmd-router",
+		Namespace:  "models",
+		ModelKey:   "borg/models",
+		Automodel:  true,
+		ModelsPath: defaultModelsEP,
+		APIKey:     discovery.DefaultAPIKey,
+	}, client)
+
+	endpoints, err := service.Discover(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []discovery.Endpoint{
+		{URL: "https://model-api.models.svc:9443/openai", Models: []string{"alpha"}, APIKey: discovery.DefaultAPIKey},
+	}
+	if !reflect.DeepEqual(endpoints, want) {
+		t.Fatalf("unexpected endpoints\nwant: %#v\n got: %#v", want, endpoints)
+	}
+}
+
+func TestDiscoverServicesSkipDeletingAndAmbiguousPorts(t *testing.T) {
+	deleting := testService("deleting", "models", map[string]string{"borg/models": "alpha"}, nil, 8080)
+	now := metav1.Now()
+	deleting.DeletionTimestamp = &now
+	client := fake.NewSimpleClientset(
+		deleting,
+		testService("ambiguous", "models", map[string]string{"borg/models": "beta"}, nil, 8080, 9090),
+		testService("no-ports", "models", map[string]string{"borg/models": "gamma"}, nil),
+	)
+	service := NewServiceWithClient(config.ResolvedServiceDiscovery{
+		ID:         "llmd-router",
+		Namespace:  "models",
+		ModelKey:   "borg/models",
+		ModelsPath: defaultModelsEP,
+		APIKey:     discovery.DefaultAPIKey,
+	}, client, WithAutomodel(false))
+
+	endpoints, err := service.Discover(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(endpoints) != 0 {
+		t.Fatalf("expected ineligible services to be skipped, got %#v", endpoints)
+	}
+}
+
+func TestDiscoverServiceAutomodel(t *testing.T) {
+	client := fake.NewSimpleClientset(testService("model-api", "models", nil, nil, 8080))
+	httpClient := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		if got := req.URL.String(); got != "http://model-api.models.svc:8080/v1/models" {
+			t.Fatalf("unexpected automodel URL %q", got)
+		}
+		if got := req.Header.Get("Authorization"); got != "Bearer sk-router" {
+			t.Fatalf("unexpected automodel authorization %q", got)
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     make(http.Header),
+			Body:       io.NopCloser(strings.NewReader(`{"object":"list","data":[{"id":"alpha"}]}`)),
+		}, nil
+	})}
+	service := NewServiceWithClient(config.ResolvedServiceDiscovery{
+		ID:         "llmd-router",
+		Namespace:  "models",
+		Automodel:  true,
+		ModelsPath: defaultModelsEP,
+		APIKey:     "sk-router",
+	}, client, WithHTTPClient(httpClient))
+
+	endpoints, err := service.Discover(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []discovery.Endpoint{
+		{URL: "http://model-api.models.svc:8080", Models: []string{"alpha"}, APIKey: "sk-router"},
+	}
+	if !reflect.DeepEqual(endpoints, want) {
+		t.Fatalf("unexpected endpoints\nwant: %#v\n got: %#v", want, endpoints)
+	}
+}
+
+func TestDiscoverServiceUsesConfiguredFrontDoorContract(t *testing.T) {
+	serviceObject := testService("qwen-inference-scheduler", "llm-d", map[string]string{
+		"borg/models":   "annotation-model",
+		"borg/protocol": "http",
+		"borg/apiport":  "9999",
+		"borg/apibase":  "/annotation",
+	}, map[string]string{"llm-d.ai/inferenceServing": "true"})
+	serviceObject.Spec.Ports = []corev1.ServicePort{
+		{Name: "grpc", Port: 9000},
+		{Name: "http", Port: 8000},
+	}
+	client := fake.NewSimpleClientset(serviceObject)
+	service := NewServiceWithClient(config.ResolvedServiceDiscovery{
+		ID:         "qwen-router",
+		Namespace:  "llm-d",
+		Selector:   "llm-d.ai/inferenceServing=true",
+		PortName:   "http",
+		Protocol:   "https",
+		APIBase:    "/openai",
+		Models:     []string{"Qwen/Qwen3-32B"},
+		Automodel:  true,
+		ModelsPath: defaultModelsEP,
+		APIKey:     "sk-router",
+	}, client)
+
+	endpoints, err := service.Discover(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []discovery.Endpoint{{
+		URL:    "https://qwen-inference-scheduler.llm-d.svc:8000/openai",
+		Models: []string{"Qwen/Qwen3-32B"},
+		APIKey: "sk-router",
+	}}
+	if !reflect.DeepEqual(endpoints, want) {
+		t.Fatalf("unexpected llm-d front-door endpoint\nwant: %#v\n got: %#v", want, endpoints)
+	}
+}
+
+func TestDiscoverNamedServiceNotFoundProducesEmptySnapshot(t *testing.T) {
+	client := fake.NewSimpleClientset()
+	service := NewServiceWithClient(config.ResolvedServiceDiscovery{
+		ID:          "qwen-router",
+		Namespace:   "llm-d",
+		ServiceName: "missing-router",
+		PortName:    "http",
+		Models:      []string{"Qwen/Qwen3-32B"},
+	}, client)
+
+	endpoints, err := service.Discover(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(endpoints) != 0 {
+		t.Fatalf("expected missing named Service to clear its snapshot, got %#v", endpoints)
+	}
+}
+
+func TestDiscoverAutomodelConcurrencyIsBounded(t *testing.T) {
+	objects := make([]runtime.Object, 0, 6)
+	for i := 1; i <= 6; i++ {
+		objects = append(objects, testPod(
+			fmt.Sprintf("model-%d", i),
+			"default",
+			corev1.PodRunning,
+			fmt.Sprintf("10.0.0.%d", i),
+			nil,
+			nil,
+		))
+	}
+	client := fake.NewSimpleClientset(objects...)
+	started := make(chan struct{}, len(objects))
+	release := make(chan struct{})
+	var active atomic.Int32
+	var maximum atomic.Int32
+	httpClient := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		current := active.Add(1)
+		for {
+			previous := maximum.Load()
+			if current <= previous || maximum.CompareAndSwap(previous, current) {
+				break
+			}
+		}
+		started <- struct{}{}
+		<-release
+		active.Add(-1)
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     make(http.Header),
+			Body:       io.NopCloser(strings.NewReader(`{"object":"list","data":[{"id":"alpha"}]}`)),
+		}, nil
+	})}
+	service := NewWithClient(
+		[]config.DiscoverySelector{{}},
+		client,
+		WithHTTPClient(httpClient),
+		WithModelConcurrency(2),
+	)
+
+	type result struct {
+		endpoints []discovery.Endpoint
+		err       error
+	}
+	done := make(chan result, 1)
+	go func() {
+		endpoints, err := service.Discover(context.Background())
+		done <- result{endpoints: endpoints, err: err}
+	}()
+
+	for range 2 {
+		select {
+		case <-started:
+		case <-time.After(time.Second):
+			t.Fatal("timed out waiting for bounded automodel requests")
+		}
+	}
+	select {
+	case <-started:
+		t.Fatal("more than two automodel requests started concurrently")
+	case <-time.After(25 * time.Millisecond):
+	}
+	close(release)
+
+	select {
+	case got := <-done:
+		if got.err != nil {
+			t.Fatal(got.err)
+		}
+		if len(got.endpoints) != len(objects) {
+			t.Fatalf("expected %d endpoints, got %d", len(objects), len(got.endpoints))
+		}
+		for idx, endpoint := range got.endpoints {
+			wantURL := fmt.Sprintf("http://10.0.0.%d:8000", idx+1)
+			if endpoint.URL != wantURL {
+				t.Fatalf("endpoint %d URL = %q, want %q", idx, endpoint.URL, wantURL)
+			}
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for discovery")
+	}
+	if got := maximum.Load(); got != 2 {
+		t.Fatalf("expected maximum automodel concurrency 2, got %d", got)
+	}
+}
+
+func TestResolveCandidatesStopsWorkersAfterCancellation(t *testing.T) {
+	var requests atomic.Int32
+	service := newService(fake.NewSimpleClientset(), WithHTTPClient(&http.Client{
+		Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+			requests.Add(1)
+			return nil, errors.New("unexpected request")
+		}),
+	}))
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	endpoints := service.resolveCandidates(ctx, []modelCandidate{
+		{endpoint: "http://one.invalid", automodel: true, modelsPath: defaultModelsEP},
+		{endpoint: "http://two.invalid", automodel: true, modelsPath: defaultModelsEP},
+	})
+	if len(endpoints) != 0 {
+		t.Fatalf("expected no endpoints after cancellation, got %#v", endpoints)
+	}
+	if requests.Load() != 0 {
+		t.Fatalf("expected canceled workers not to issue requests, got %d", requests.Load())
+	}
+}
+
+func TestKubernetesRequestTimeoutCap(t *testing.T) {
+	tests := []struct {
+		name string
+		in   time.Duration
+		want time.Duration
+	}{
+		{name: "unset", in: 0, want: defaultKubernetesTimeout},
+		{name: "negative", in: -time.Second, want: defaultKubernetesTimeout},
+		{name: "shorter", in: 10 * time.Second, want: 10 * time.Second},
+		{name: "equal", in: defaultKubernetesTimeout, want: defaultKubernetesTimeout},
+		{name: "longer", in: time.Minute, want: defaultKubernetesTimeout},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			source := &rest.Config{Timeout: test.in}
+			configured := withKubernetesTimeoutCap(source)
+			if configured.Timeout != test.want {
+				t.Fatalf("expected Kubernetes timeout %s, got %s", test.want, configured.Timeout)
+			}
+			if source.Timeout != test.in {
+				t.Fatalf("expected source timeout %s to remain unchanged, got %s", test.in, source.Timeout)
+			}
+			if configured == source {
+				t.Fatal("expected a copied Kubernetes config")
+			}
+		})
+	}
+}
+
 func TestDiscoverParsesModelKeyCommaList(t *testing.T) {
 	client := fake.NewSimpleClientset(
 		testPod("model", "default", corev1.PodRunning, "10.0.0.1", map[string]string{
@@ -181,7 +505,7 @@ func TestDiscoverAutomodelSuccess(t *testing.T) {
 		}
 		sawAuth = r.Header.Get("Authorization")
 		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprint(w, `{"object":"list","data":[{"id":"alpha"},{"id":"beta"}]}`)
+		_, _ = fmt.Fprint(w, `{"object":"list","data":[{"id":"alpha"},{"id":"beta"}]}`)
 	}))
 	defer server.Close()
 
@@ -226,7 +550,7 @@ func TestDiscoverAutomodelFailuresSkipEndpoints(t *testing.T) {
 		{
 			name: "json",
 			handler: func(w http.ResponseWriter, _ *http.Request) {
-				fmt.Fprint(w, `not-json`)
+				_, _ = fmt.Fprint(w, `not-json`)
 			},
 		},
 	}
@@ -279,7 +603,7 @@ func TestDiscoverAutomodelHTTPErrorSkipsEndpoint(t *testing.T) {
 func TestDiscoverAutomodelMixedFailuresKeepSuccessfulEndpoints(t *testing.T) {
 	good := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprint(w, `{"object":"list","data":[{"id":"alpha"}]}`)
+		_, _ = fmt.Fprint(w, `{"object":"list","data":[{"id":"alpha"}]}`)
 	}))
 	defer good.Close()
 	bad := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -313,10 +637,28 @@ func TestDiscoverAutomodelMixedFailuresKeepSuccessfulEndpoints(t *testing.T) {
 
 func TestDiscoverKubernetesListErrorReturnsError(t *testing.T) {
 	client := fake.NewSimpleClientset()
-	client.Fake.PrependReactor("list", "pods", func(ktesting.Action) (bool, runtime.Object, error) {
+	client.PrependReactor("list", "pods", func(ktesting.Action) (bool, runtime.Object, error) {
 		return true, nil, errors.New("list failed")
 	})
 	service := NewWithClient([]config.DiscoverySelector{{}}, client)
+
+	if _, err := service.Discover(context.Background()); err == nil {
+		t.Fatal("expected list error")
+	}
+}
+
+func TestDiscoverKubernetesServiceListErrorReturnsError(t *testing.T) {
+	client := fake.NewSimpleClientset()
+	client.PrependReactor("list", "services", func(ktesting.Action) (bool, runtime.Object, error) {
+		return true, nil, errors.New("list failed")
+	})
+	service := NewServiceWithClient(config.ResolvedServiceDiscovery{
+		ID:         "llmd-router",
+		Selector:   "app=router",
+		Automodel:  true,
+		ModelsPath: defaultModelsEP,
+		APIKey:     discovery.DefaultAPIKey,
+	}, client)
 
 	if _, err := service.Discover(context.Background()); err == nil {
 		t.Fatal("expected list error")
@@ -338,6 +680,22 @@ func testPod(name string, namespace string, phase corev1.PodPhase, ip string, an
 				{Type: corev1.PodReady, Status: corev1.ConditionTrue},
 			},
 		},
+	}
+}
+
+func testService(name string, namespace string, annotations map[string]string, labels map[string]string, ports ...int32) *corev1.Service {
+	servicePorts := make([]corev1.ServicePort, 0, len(ports))
+	for _, port := range ports {
+		servicePorts = append(servicePorts, corev1.ServicePort{Port: port})
+	}
+	return &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:        name,
+			Namespace:   namespace,
+			Annotations: annotations,
+			Labels:      labels,
+		},
+		Spec: corev1.ServiceSpec{Ports: servicePorts},
 	}
 }
 

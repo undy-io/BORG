@@ -132,19 +132,10 @@ Validation behavior in `ProxyService.require_auth()`:
 - A successfully decrypted token must start with the configured auth prefix.
 - The suffix after the prefix becomes `request.state.username`.
 
-## Secret Compatibility Contract
-`genkey.py` currently accepts two Secret data formats when reading the auth key:
-
-- Legacy raw 32-byte key material stored in Secret data
-- Printable URL-safe base64 auth key text stored in Secret data
-
-Observed from tests:
-- `tests/test_genkey.py` verifies both formats are accepted.
-
-Migration implication:
-- Helm normalizes legacy raw-byte secrets and generated auth keys to URL-safe base64 text.
-- The Go runtime intentionally accepts URL-safe base64 auth keys only.
-- The Go `borg-genkey` utility accepts both Secret data formats so it can operate across migrated and legacy chart installs.
+## Deployment Secret Contract
+Externally managed auth Secrets must contain the printable URL-safe base64 auth
+key text consumed by the Go runtime. No legacy raw-key Secret migration is part
+of the deployment contract.
 
 ## App Construction Contract
 - `create_app(config_path)` returns an isolated FastAPI app with its own proxy and discovery state.

@@ -77,8 +77,26 @@ func TestAnnotationDiscoveryAndSelectorRequest(t *testing.T) {
 
 	models := waitForModels(t, ctx.proxy, setOf("alpha", "beta"), setOf("hidden"))
 	assertSetEqual(t, models, setOf("alpha", "beta"))
-	if !ctx.kube.hasRequest("models", "borg/expose=vllm") {
+	if !ctx.kube.hasRequest("pods", "models", "borg/expose=vllm") {
 		t.Fatalf("fake Kubernetes did not record expected selector request; got %#v", ctx.kube.requests())
+	}
+}
+
+func TestServiceDiscoveryAndSelectorRequest(t *testing.T) {
+	ctx := newSmokeContext(t, nil)
+	router := newService("model-api", "models", map[string]string{
+		"borg/expose": "service",
+	}, map[string]string{
+		"borg/models": "service-model",
+	}, 9000, 8080)
+	router.Spec.Ports[0].Name = "grpc"
+	router.Spec.Ports[1].Name = "http"
+	ctx.kube.setServices([]kubernetesService{router})
+
+	models := waitForModels(t, ctx.proxy, setOf("service-model"), nil)
+	assertSetEqual(t, models, setOf("service-model"))
+	if !ctx.kube.hasRequest("services", "models", "borg/expose=service") {
+		t.Fatalf("fake Kubernetes did not record expected Service selector request; got %#v", ctx.kube.requests())
 	}
 }
 
@@ -168,7 +186,7 @@ func TestEndpointAnnotationOverridesAreUsedForForwarding(t *testing.T) {
 	waitForModels(t, ctx.proxy, setOf("override-model"), nil)
 
 	response := postJSON(t, ctx.proxy.url+"/v1/chat/completions", []byte(`{"model":"override-model","messages":[]}`))
-	defer response.Body.Close()
+	defer func() { _ = response.Body.Close() }()
 	if response.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(response.Body)
 		t.Fatalf("proxy POST status = %d, want 200; body=%s\n%s", response.StatusCode, body, ctx.proxy.logs())
@@ -366,12 +384,14 @@ type fakeKubernetesAPI struct {
 	server             *httptest.Server
 	mu                 sync.Mutex
 	pods               []pod
+	services           []kubernetesService
 	listRequests       []listRequest
 	failLists          bool
 	failedRequestCount int
 }
 
 type listRequest struct {
+	Resource  string
 	Namespace string
 	Selector  string
 }
@@ -388,14 +408,14 @@ func (f *fakeKubernetesAPI) handle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	namespace, ok := namespaceFromPodListPath(r.URL.Path)
+	namespace, resource, ok := namespaceFromListPath(r.URL.Path)
 	if !ok {
 		http.NotFound(w, r)
 		return
 	}
 
 	selector := r.URL.Query().Get("labelSelector")
-	f.recordRequest(namespace, selector)
+	f.recordRequest(resource, namespace, selector)
 	if f.shouldFailLists() {
 		f.recordFailedRequest()
 		writeJSON(w, http.StatusInternalServerError, map[string]any{
@@ -407,15 +427,31 @@ func (f *fakeKubernetesAPI) handle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var items []pod
-	for _, candidate := range f.currentPods() {
-		if candidate.Metadata.Namespace == namespace && matchesSelector(candidate, selector) {
-			items = append(items, candidate)
+	var kind string
+	var items any
+	switch resource {
+	case "pods":
+		kind = "PodList"
+		var selected []pod
+		for _, candidate := range f.currentPods() {
+			if candidate.Metadata.Namespace == namespace && matchesSelector(candidate.Metadata.Labels, selector) {
+				selected = append(selected, candidate)
+			}
 		}
+		items = selected
+	case "services":
+		kind = "ServiceList"
+		var selected []kubernetesService
+		for _, candidate := range f.currentServices() {
+			if candidate.Metadata.Namespace == namespace && matchesSelector(candidate.Metadata.Labels, selector) {
+				selected = append(selected, candidate)
+			}
+		}
+		items = selected
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
-		"kind":       "PodList",
+		"kind":       kind,
 		"apiVersion": "v1",
 		"metadata":   map[string]string{"resourceVersion": "1"},
 		"items":      items,
@@ -442,6 +478,18 @@ func (f *fakeKubernetesAPI) currentPods() []pod {
 	return append([]pod(nil), f.pods...)
 }
 
+func (f *fakeKubernetesAPI) setServices(services []kubernetesService) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.services = append([]kubernetesService(nil), services...)
+}
+
+func (f *fakeKubernetesAPI) currentServices() []kubernetesService {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]kubernetesService(nil), f.services...)
+}
+
 func (f *fakeKubernetesAPI) setFailLists(fail bool) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -454,10 +502,10 @@ func (f *fakeKubernetesAPI) shouldFailLists() bool {
 	return f.failLists
 }
 
-func (f *fakeKubernetesAPI) recordRequest(namespace string, selector string) {
+func (f *fakeKubernetesAPI) recordRequest(resource string, namespace string, selector string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.listRequests = append(f.listRequests, listRequest{Namespace: namespace, Selector: selector})
+	f.listRequests = append(f.listRequests, listRequest{Resource: resource, Namespace: namespace, Selector: selector})
 }
 
 func (f *fakeKubernetesAPI) requests() []listRequest {
@@ -466,9 +514,9 @@ func (f *fakeKubernetesAPI) requests() []listRequest {
 	return append([]listRequest(nil), f.listRequests...)
 }
 
-func (f *fakeKubernetesAPI) hasRequest(namespace string, selector string) bool {
+func (f *fakeKubernetesAPI) hasRequest(resource string, namespace string, selector string) bool {
 	for _, request := range f.requests() {
-		if request.Namespace == namespace && request.Selector == selector {
+		if request.Resource == resource && request.Namespace == namespace && request.Selector == selector {
 			return true
 		}
 	}
@@ -512,6 +560,22 @@ type podCondition struct {
 	Status string `json:"status"`
 }
 
+type kubernetesService struct {
+	Kind       string      `json:"kind"`
+	APIVersion string      `json:"apiVersion"`
+	Metadata   podMetadata `json:"metadata"`
+	Spec       serviceSpec `json:"spec"`
+}
+
+type serviceSpec struct {
+	Ports []servicePort `json:"ports"`
+}
+
+type servicePort struct {
+	Name string `json:"name,omitempty"`
+	Port int32  `json:"port"`
+}
+
 func newPod(name string, namespace string, podIP string, labels map[string]string, annotations map[string]string) pod {
 	return pod{
 		Kind:       "Pod",
@@ -529,6 +593,24 @@ func newPod(name string, namespace string, podIP string, labels map[string]strin
 				{Type: "Ready", Status: "True"},
 			},
 		},
+	}
+}
+
+func newService(name string, namespace string, labels map[string]string, annotations map[string]string, ports ...int32) kubernetesService {
+	servicePorts := make([]servicePort, 0, len(ports))
+	for _, port := range ports {
+		servicePorts = append(servicePorts, servicePort{Port: port})
+	}
+	return kubernetesService{
+		Kind:       "Service",
+		APIVersion: "v1",
+		Metadata: podMetadata{
+			Name:        name,
+			Namespace:   namespace,
+			Labels:      labels,
+			Annotations: annotations,
+		},
+		Spec: serviceSpec{Ports: servicePorts},
 	}
 }
 
@@ -554,12 +636,20 @@ func runGoProxy(t *testing.T, tempDir string, config string, kubeconfig string) 
 	if err != nil {
 		t.Fatalf("create stdout log: %v", err)
 	}
-	defer stdout.Close()
+	defer func() {
+		if closeErr := stdout.Close(); closeErr != nil {
+			t.Errorf("close stdout log: %v", closeErr)
+		}
+	}()
 	stderr, err := os.Create(stderrPath)
 	if err != nil {
 		t.Fatalf("create stderr log: %v", err)
 	}
-	defer stderr.Close()
+	defer func() {
+		if closeErr := stderr.Close(); closeErr != nil {
+			t.Errorf("close stderr log: %v", closeErr)
+		}
+	}()
 
 	cmd := exec.Command(
 		borgBinary,
@@ -662,6 +752,12 @@ func writeBorgConfig(t *testing.T, tempDir string) string {
   k8s_discover:
     - namespace: "models"
       selector: "borg/expose=vllm"
+      modelkey: "borg/models"
+  k8s_service_discover:
+    - id: "llmd-router"
+      namespace: "models"
+      selector: "borg/expose=service"
+      port_name: "http"
       modelkey: "borg/models"
 `)
 	if err := os.WriteFile(path, config, 0o600); err != nil {
@@ -785,7 +881,7 @@ func modelIDs(proxy *runningProxy) (map[string]struct{}, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer response.Body.Close()
+	defer func() { _ = response.Body.Close() }()
 	if response.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(response.Body)
 		return nil, fmt.Errorf("status %d: %s", response.StatusCode, body)
@@ -821,15 +917,15 @@ func postJSON(t *testing.T, requestURL string, body []byte) *http.Response {
 	return response
 }
 
-func namespaceFromPodListPath(path string) (string, bool) {
+func namespaceFromListPath(path string) (string, string, bool) {
 	parts := strings.Split(strings.Trim(path, "/"), "/")
-	if len(parts) == 5 && parts[0] == "api" && parts[1] == "v1" && parts[2] == "namespaces" && parts[4] == "pods" {
-		return parts[3], true
+	if len(parts) == 5 && parts[0] == "api" && parts[1] == "v1" && parts[2] == "namespaces" && (parts[4] == "pods" || parts[4] == "services") {
+		return parts[3], parts[4], true
 	}
-	return "", false
+	return "", "", false
 }
 
-func matchesSelector(pod pod, selector string) bool {
+func matchesSelector(labels map[string]string, selector string) bool {
 	if selector == "" {
 		return true
 	}
@@ -843,7 +939,7 @@ func matchesSelector(pod pod, selector string) bool {
 		if !ok {
 			return false
 		}
-		if pod.Metadata.Labels[strings.TrimSpace(key)] != strings.TrimSpace(value) {
+		if labels[strings.TrimSpace(key)] != strings.TrimSpace(value) {
 			return false
 		}
 	}
@@ -900,7 +996,7 @@ func freePort(t *testing.T) int {
 	if err != nil {
 		t.Fatalf("reserve free port: %v", err)
 	}
-	defer listener.Close()
+	defer func() { _ = listener.Close() }()
 	return listener.Addr().(*net.TCPAddr).Port
 }
 

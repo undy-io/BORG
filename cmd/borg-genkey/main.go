@@ -25,6 +25,7 @@ import (
 const (
 	defaultSecretSuffix    = "-auth"
 	defaultConfigMapSuffix = "-config"
+	chartConfigMapSuffix   = "-borg-config"
 )
 
 type options struct {
@@ -33,13 +34,15 @@ type options struct {
 	release         string
 	keyName         string
 	authPrefix      string
+	secretName      string
 	secretSuffix    string
 	configMapSuffix string
 }
 
 type configInfo struct {
-	authKeyName string
-	authPrefix  string
+	authKeyName    string
+	authPrefix     string
+	authSecretName string
 }
 
 func main() {
@@ -78,6 +81,7 @@ func parseOptions(args []string, stderr io.Writer) (options, error) {
 	flags.StringVar(&opts.keyName, "key-name", "", "Secret data key (overrides ConfigMap)")
 	flags.StringVar(&opts.keyName, "k", "", "Secret data key (overrides ConfigMap)")
 	flags.StringVar(&opts.authPrefix, "auth-prefix", "", "Prefix for the token plaintext (overrides ConfigMap)")
+	flags.StringVar(&opts.secretName, "secret-name", "", "Secret name (overrides ConfigMap and release suffix)")
 	flags.StringVar(&opts.secretSuffix, "secret-suffix", defaultSecretSuffix, "Suffix appended to <release> for the Secret")
 	flags.StringVar(&opts.configMapSuffix, "configmap-suffix", defaultConfigMapSuffix, "Suffix appended to <release> for the ConfigMap")
 
@@ -148,6 +152,7 @@ func flagRequiresValue(arg string) bool {
 		"-release", "--release", "-r",
 		"-key-name", "--key-name", "-k",
 		"-auth-prefix", "--auth-prefix",
+		"-secret-name", "--secret-name",
 		"-secret-suffix", "--secret-suffix",
 		"-configmap-suffix", "--configmap-suffix":
 		return true
@@ -182,7 +187,15 @@ func run(ctx context.Context, client kubernetes.Interface, opts options, stdout 
 		authPrefix = config.DefaultAuthPrefix
 	}
 
-	key, err := getKey(ctx, client, opts.namespace, opts.release, opts.secretSuffix, keyName, stderr)
+	secretName := opts.secretName
+	if secretName == "" {
+		secretName = info.authSecretName
+	}
+	if secretName == "" {
+		secretName = opts.release + opts.secretSuffix
+	}
+
+	key, err := getKey(ctx, client, opts.namespace, secretName, keyName, stderr)
 	if err != nil {
 		return err
 	}
@@ -196,21 +209,35 @@ func run(ctx context.Context, client kubernetes.Interface, opts options, stdout 
 }
 
 func getConfigInfo(ctx context.Context, client kubernetes.Interface, namespace string, release string, configMapSuffix string, stderr io.Writer) (configInfo, error) {
-	name := release + configMapSuffix
-	cm, err := client.CoreV1().ConfigMaps(namespace).Get(ctx, name, metav1.GetOptions{})
-	if err != nil {
+	names := []string{release + configMapSuffix}
+	if configMapSuffix == defaultConfigMapSuffix {
+		names = []string{release + chartConfigMapSuffix, release + defaultConfigMapSuffix}
+	}
+
+	var cm *corev1.ConfigMap
+	for _, name := range names {
+		var err error
+		cm, err = client.CoreV1().ConfigMaps(namespace).Get(ctx, name, metav1.GetOptions{})
+		if err == nil {
+			break
+		}
 		if apierrors.IsNotFound(err) {
-			return configInfo{}, nil
+			continue
 		}
 		return configInfo{}, fmt.Errorf("[generate_key] cannot read ConfigMap %q in namespace %q: %w", name, namespace, err)
 	}
+	if cm == nil {
+		return configInfo{}, nil
+	}
 
 	rawYAML := ""
+	info := configInfo{}
 	if cm.Data != nil {
 		rawYAML = cm.Data["config.yaml"]
+		info.authSecretName = cm.Data["auth-secret-name"]
 	}
 	if rawYAML == "" {
-		return configInfo{}, nil
+		return info, nil
 	}
 
 	var parsed struct {
@@ -220,18 +247,16 @@ func getConfigInfo(ctx context.Context, client kubernetes.Interface, namespace s
 		} `yaml:"borg"`
 	}
 	if err := yaml.Unmarshal([]byte(rawYAML), &parsed); err != nil {
-		fmt.Fprintf(stderr, "[generate_key] WARNING: cannot parse %s/config.yaml: %v\n", name, err)
-		return configInfo{}, nil
+		_, _ = fmt.Fprintf(stderr, "[generate_key] WARNING: cannot parse %s/config.yaml: %v\n", cm.Name, err)
+		return info, nil
 	}
 
-	return configInfo{
-		authKeyName: parsed.Borg.AuthKeyFromEnv,
-		authPrefix:  parsed.Borg.AuthPrefix,
-	}, nil
+	info.authKeyName = parsed.Borg.AuthKeyFromEnv
+	info.authPrefix = parsed.Borg.AuthPrefix
+	return info, nil
 }
 
-func getKey(ctx context.Context, client kubernetes.Interface, namespace string, release string, secretSuffix string, keyName string, stderr io.Writer) ([]byte, error) {
-	secretName := release + secretSuffix
+func getKey(ctx context.Context, client kubernetes.Interface, namespace string, secretName string, keyName string, stderr io.Writer) ([]byte, error) {
 	secret, err := client.CoreV1().Secrets(namespace).Get(ctx, secretName, metav1.GetOptions{})
 	if err != nil {
 		if statusErr, ok := err.(*apierrors.StatusError); ok {
@@ -246,7 +271,7 @@ func getKey(ctx context.Context, client kubernetes.Interface, namespace string, 
 	}
 	key, err := auth.DecodeSecretKey(secretData)
 	if err != nil {
-		return nil, fmt.Errorf("[generate_key] secret data %q did not contain a raw AES key or printable URL-safe auth key: %w", keyName, err)
+		return nil, fmt.Errorf("[generate_key] secret data %q must contain a printable URL-safe base64 auth key: %w", keyName, err)
 	}
 	return key, nil
 }
@@ -270,6 +295,6 @@ func pickSecretData(secret *corev1.Secret, secretName string, keyName string, st
 	}
 	sort.Strings(keys)
 	keyName = keys[0]
-	fmt.Fprintf(stderr, "[generate_key] using key %q from Secret %q\n", keyName, secretName)
+	_, _ = fmt.Fprintf(stderr, "[generate_key] using key %q from Secret %q\n", keyName, secretName)
 	return keyName, secret.Data[keyName], nil
 }

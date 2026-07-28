@@ -82,6 +82,7 @@ The script:
 - mints a validation token with the built Go `borg-genkey`
 - port-forwards `svc/borg-borg` to `127.0.0.1:<local-port>`
 - validates HTTP behavior with `curl`
+- performs a config-only Helm upgrade and verifies that it creates a new ReplicaSet
 
 ## Assertions
 The validation run checks that:
@@ -92,6 +93,7 @@ The validation run checks that:
 - discovered endpoints rewrite upstream auth to `Bearer EMPTY`
 - POST path is preserved
 - authenticated streaming POST returns deterministic SSE chunks and `data: [DONE]`
+- a config-only Helm upgrade changes the config checksum and active ReplicaSet
 
 ## Failure Diagnostics
 On failure after cluster readiness, the script prints:
@@ -125,4 +127,4 @@ The full create/delete path has passed from raw WSL with the Go dummy backend:
 scripts/validate-kind-go.sh --create-cluster --delete-cluster
 ```
 
-That run completed cluster creation, image build/load, Helm deployment, root/model checks, missing-auth rejection, authenticated POST forwarding, SSE streaming, and cluster deletion.
+That run completed cluster creation, image build/load, Helm deployment, root/model checks, missing-auth rejection, authenticated POST forwarding, SSE streaming, and cluster deletion. The config-only rollout assertion was added after that recorded run and still requires host/raw WSL execution.

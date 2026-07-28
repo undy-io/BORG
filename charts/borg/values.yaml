@@ -16,11 +16,19 @@ authKeySecret:
   # value: ""
 
 apikeySecrets:
+  # Set existingSecret to use a pre-created Secret, or create=false to
+  # reference name without having Helm render it.
+  create: true
+  existingSecret: ""
   name: borg-apikeys
 
 serviceAccount:
   create: true
   name: ""
+
+# Pod-template annotations for integrations such as external Secret reloaders.
+# BORG's internal checksum annotations take precedence over matching keys.
+podAnnotations: {}
 
 rbac:
   create: true
@@ -43,14 +51,31 @@ config:
     failure_threshold: 3
     cooldown_seconds: 30
     eject_on_500: false
+  upstream:
+    # Time to wait after sending a request for final response headers to complete.
+    # Set to 0 for unlimited.
+    response_header_timeout_seconds: 300
   instances: []
   # - endpoint: http://10.0.0.5:8000
   #   apikeyEnv: VLLM_APIKEY_1
+  #   apikey: sk-example # Secret input when apikeySecrets.create=true
   #   models: ["gpt-3.5-turbo"]
   k8s_discover:
     - namespace: vllm-services
       selector: borg/expose=default
       modelkey: borg/models
+  k8s_service_discover: []
+  # Discover an llm-d inference scheduler/router Service as one BORG endpoint.
+  # - id: qwen-router
+  #   namespace: llm-d
+  #   service_name: qwen-inference-scheduler
+  #   port_name: http
+  #   models: ["Qwen/Qwen3-32B"]
+  #   # Or omit models to query the router's /v1/models endpoint.
+  #   automodel: true
+  #   models_path: /v1/models
+  #   apikeyEnv: LLMD_API_KEY
+  #   apikey: sk-router # Secret input when apikeySecrets.create=true
 
 server:
   tls:
@@ -63,8 +88,7 @@ server:
 ingress:
   enabled: false
   className: "nginx"
-  annotations:
-    nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+  annotations: {}
   issuer:
     name: pkirules-tls
     kind: Issuer  # Could be ClusterIssuer for other environments

@@ -2,7 +2,7 @@
 
 ## NOTE If you couldn't tell from all the unicode icons, this is AI generated so may have errors. At some point I'll care and fix it.
 
-> **BORG** turns a fleet of OpenAI‑compatible back‑ends (vLLM, openai‑proxy, FastAPI stubs, etc.) into **one** drop‑in `/v1` endpoint. It auto‑discovers pods in your cluster, fan‑outs requests across them, and exposes the union of all models.
+> **BORG** turns a fleet of OpenAI‑compatible back‑ends (vLLM, openai‑proxy, FastAPI stubs, etc.) into **one** drop‑in `/v1` endpoint. It auto‑discovers pods and Services in your cluster, fans requests across them, and exposes the union of all models.
 
 ![CI](https://img.shields.io/github/actions/workflow/status/undy-io/BORG/docker.yml?logo=github\&label=Build)
 ![License](https://img.shields.io/github/license/undy-io/BORG)
@@ -30,7 +30,7 @@ The production container exposes the Go service as `/usr/local/bin/borg`. During
 
 |                           |                                                                                    |
 | ------------------------- | ---------------------------------------------------------------------------------- |
-| **Zero‑config discovery** | Finds pods matching a label selector and registers their models automatically      |
+| **Zero‑config discovery** | Finds pods or Services matching label selectors and registers their models automatically |
 | **Multi‑backend fan‑out** | Routes any `/v1/*` call to the next healthy backend and returns the first success  |
 | **Model union**           | `GET /v1/models` merges all discovered models                                      |
 | **Pluggable auth**        | Optional AES‑256 request signing (`auth_key`) and token prefix validation (`auth_prefix`) |
@@ -98,6 +98,9 @@ borg:
     cooldown_seconds: 30
     eject_on_500: false
 
+  upstream:
+    response_header_timeout_seconds: 300 # 0 disables the timeout
+
   # Static back‑ends
   instances:
     - endpoint: "http://10.0.0.5:8000"
@@ -106,12 +109,35 @@ borg:
 
   # Dynamic discovery
   k8s_discover:
-    - namespace: vllm-servers
+    - id: vllm-pods
+      namespace: vllm-servers
       selector: borg/expose=vllm
       modelkey: borg/models          # pod annotation holding model list
+
+  k8s_service_discover:
+    - id: qwen-router
+      namespace: llm-d
+      service_name: qwen-inference-scheduler
+      port_name: http
+      models: ["Qwen/Qwen3-32B"]
+      # Or omit models and query the router's OpenAI model endpoint.
+      automodel: true
+      models_path: /v1/models
+      apikeyEnv: LLMD_API_KEY
 ```
 
 The file can be mounted into the container or set via `PROXY_CONFIG` env‑var. See `config.example.yaml` for a template.
+
+After BORG finishes sending an upstream request, it waits this long for the
+upstream's final response headers to complete. A timeout counts against that
+endpoint and returns `504`. A client may explicitly permit pre-commit failover
+for that case with:
+
+```http
+Borg-Retry: response-header-timeout
+```
+
+BORG removes this header before forwarding the request upstream.
 
 ---
 
@@ -162,9 +188,39 @@ Key values
 | `certificate.enabled`| Create a cert-manager Certificate   | `false`                |
 | `server.tls.enabled` | Serve HTTPS directly from TLS secret| `false`                |
 | `authKeySecret.existingSecret` | Use externally managed auth Secret | `""`       |
-| `rbac.clusterScoped` | Use cluster-wide pod discovery RBAC | `true`                 |
+| `authKeySecret.create` | Create the named auth Secret        | `true`               |
+| `apikeySecrets.existingSecret` | Use externally managed backend API-key Secret | `""` |
+| `apikeySecrets.create` | Create the backend API-key Secret   | `true`               |
+| `rbac.clusterScoped` | Use cluster-wide discovery RBAC     | `true`                 |
+| `rbac.namespaces`    | Namespaces for Role-based discovery | `[]`                   |
+| `rbac.extraRules`    | Additional policy integration rules | `[]`                   |
+| `serviceAccount.create` | Create BORG's ServiceAccount     | `true`                 |
+| `podAnnotations`     | Pod-template annotations for integrations | `{}`             |
 | `resources`          | Container resource requests/limits  | `{}`                   |
 | `config`             | Inline proxy runtime config         | See `values.yaml`      |
+
+For GitOps installs, set `authKeySecret.existingSecret` to a pre-created
+Secret. That value takes precedence and the chart does not render an auth
+Secret. With no existing Secret, `authKeySecret.create=true` preserves or
+generates the named Secret; `create=false` only references it.
+
+`authKeySecret.value` may be empty to preserve or generate a managed key,
+`EMPTY` to disable inbound authentication, or padded/unpadded base64url text
+that decodes to exactly 32 bytes. Externally managed auth Secrets use the same
+printable text contract; raw 32-byte Secret payloads are rejected.
+
+Backend API keys use the same modes through `apikeySecrets`. Static instances
+and Service discovery sources name a Secret key with `apikeyEnv`. In generated
+mode, provide `apikey` as the Secret input; BORG omits that value from its
+ConfigMap. With `existingSecret`, or `create=false`, omit `apikey` and populate
+the referenced Secret key externally.
+
+The chart adds pod-template checksums for its ConfigMap, declared auth input,
+and chart-managed backend credentials, so Helm upgrades roll pods when those
+inputs change. External Secret contents are intentionally outside Helm state.
+Use `podAnnotations` with the Secret reloader deployed in your cluster, or run
+`kubectl rollout restart deployment/<release>-borg` after rotating an external
+Secret. User `podAnnotations` cannot override BORG's internal checksum keys.
 
 For direct Service exposure with Cilium LB IPAM, disable Ingress and set the
 Service to `LoadBalancer`. Cilium pools can be selected by matching Service
@@ -246,12 +302,24 @@ go build -o bin/borg-genkey ./cmd/borg-genkey
 bin/borg-genkey <username> --namespace <namespace> --release <release>
 ```
 
+The utility discovers the chart's ConfigMap and effective auth Secret name. Use
+`--secret-name` only when the Secret is managed outside that chart metadata.
+The selected Secret field must contain printable padded or unpadded base64url
+text that decodes to a 32-byte AES-256 key.
+
 ## 🖧 How discovery works
 
-1. Each selector in `k8s_discover` is queried via the Kubernetes API.
-2. For every **Running** pod, BORG builds an endpoint URL from the pod IP and annotations (`borg/apiport`, `borg/apibase`, `borg/protocol`).
-3. If no model list is supplied, BORG calls the pod’s `/v1/models` to infer models.
-4. New endpoints are registered; stale ones are evicted.
+1. Each entry in `k8s_discover` and `k8s_service_discover` owns an independent endpoint snapshot. One failed source does not prevent the others from refreshing.
+2. Eligible pods must be Running, Ready, non-deleting, and have a PodIP. Pod endpoints use that IP and default to port `8000`.
+3. Service discovery registers stable `<name>.<namespace>.svc` front doors. Set exactly one of `service_name` or `selector`, plus `port` or `port_name` when the Service has multiple ports.
+4. For llm-d, target the inference scheduler/router's HTTP Service. BORG forwards OpenAI requests to that Service and leaves endpoint selection to llm-d; it does not discover the Service's pods or implement the EPP protocol.
+5. Service model precedence is explicit `models`, the configured `modelkey` annotation, then `models_path` enumeration when `automodel` is enabled. Enumeration uses the source's `apikeyEnv` or `apikey` credential.
+6. `borg/protocol`, `borg/apiport`, and `borg/apibase` remain annotation fallbacks. Explicit Service source fields take precedence.
+7. A failed Kubernetes list preserves only that source's previous snapshot. Per-endpoint model enumeration failures skip only that endpoint, while a successful empty refresh removes stale endpoints. BORG remains Ready when no backends are discovered.
+
+Namespace-scoped RBAC requires an explicit `rbac.namespaces` list. Set
+`rbac.extraRules` for deployment-specific policy integrations; runtime OPA
+request authorization is not part of this release.
 
 ---
 
@@ -262,6 +330,7 @@ Core local checks:
 ```bash
 go test ./...
 go vet ./...
+golangci-lint run ./...
 go build ./cmd/borg
 go build ./cmd/borg-genkey
 bash -n scripts/validate-kind-go.sh

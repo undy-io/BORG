@@ -3,15 +3,18 @@ package proxy
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
+	"net/http/httptrace"
 	"sort"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/undy-io/BORG/internal/discovery"
 	"github.com/undy-io/BORG/internal/openai"
 )
 
@@ -36,6 +39,13 @@ const (
 	compressionStreaming
 )
 
+const (
+	RetryHeader                      = "Borg-Retry"
+	RetryResponseHeaderTimeout       = "response-header-timeout"
+	defaultResponseHeaderTimeout     = 5 * time.Minute
+	responseHeaderTimeoutErrorDetail = "Upstream response header timeout"
+)
+
 type BackendHealthConfig struct {
 	Enabled          bool
 	FailureThreshold int
@@ -51,10 +61,10 @@ func WithBackendHealth(config BackendHealthConfig) Option {
 	}
 }
 
-func withClock(now func() time.Time) Option {
+func WithResponseHeaderTimeout(timeout time.Duration) Option {
 	return func(s *Service) {
-		if now != nil {
-			s.now = now
+		if timeout >= 0 {
+			s.responseHeaderTimeout = timeout
 		}
 	}
 }
@@ -64,19 +74,155 @@ type endpointHealth struct {
 	unavailableUntil    time.Time
 }
 
+type upstreamErrorKind int
+
+const (
+	upstreamErrorOther upstreamErrorKind = iota
+	upstreamErrorResponseHeaderTimeout
+)
+
+type upstreamError struct {
+	kind upstreamErrorKind
+	err  error
+}
+
+func (e *upstreamError) Error() string {
+	return e.err.Error()
+}
+
+func (e *upstreamError) Unwrap() error {
+	return e.err
+}
+
+type responseHeaderTimeoutCause struct{}
+
+func (responseHeaderTimeoutCause) Error() string {
+	return "upstream response header timeout"
+}
+
+type responseHeaderTimeoutTransport struct {
+	base    http.RoundTripper
+	timeout time.Duration
+}
+
+func (t *responseHeaderTimeoutTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	if t.timeout == 0 {
+		return t.base.RoundTrip(req)
+	}
+
+	attemptContext, cancelAttempt := context.WithCancelCause(req.Context())
+	var mu sync.Mutex
+	var timer *time.Timer
+	completed := false
+	timedOut := false
+
+	trace := &httptrace.ClientTrace{
+		WroteRequest: func(info httptrace.WroteRequestInfo) {
+			if info.Err != nil {
+				return
+			}
+			mu.Lock()
+			defer mu.Unlock()
+			if completed {
+				return
+			}
+			if timer != nil {
+				timer.Stop()
+			}
+			timer = time.AfterFunc(t.timeout, func() {
+				mu.Lock()
+				defer mu.Unlock()
+				if completed {
+					return
+				}
+				timedOut = true
+				cancelAttempt(responseHeaderTimeoutCause{})
+			})
+		},
+	}
+	tracedRequest := req.Clone(httptrace.WithClientTrace(attemptContext, trace))
+	resp, err := t.base.RoundTrip(tracedRequest)
+
+	mu.Lock()
+	completed = true
+	if timer != nil {
+		timer.Stop()
+	}
+	didTimeOut := timedOut
+	mu.Unlock()
+
+	if didTimeOut {
+		if resp != nil && resp.Body != nil {
+			_ = resp.Body.Close()
+		}
+		cancelAttempt(responseHeaderTimeoutCause{})
+		return nil, &upstreamError{kind: upstreamErrorResponseHeaderTimeout, err: responseHeaderTimeoutCause{}}
+	}
+	if err != nil {
+		cancelAttempt(nil)
+		return nil, err
+	}
+	if resp.Body == nil {
+		cancelAttempt(nil)
+		return resp, nil
+	}
+	resp.Body = &cancelOnCloseReadCloser{
+		ReadCloser: resp.Body,
+		cancel:     func() { cancelAttempt(nil) },
+	}
+	return resp, nil
+}
+
+type cancelOnCloseReadCloser struct {
+	io.ReadCloser
+	once   sync.Once
+	cancel func()
+}
+
+func (r *cancelOnCloseReadCloser) Close() error {
+	err := r.ReadCloser.Close()
+	r.once.Do(r.cancel)
+	return err
+}
+
+type registeredEndpoint struct {
+	APIKey string
+	Models map[string]struct{}
+}
+
+const StaticSourceID = discovery.StaticSourceID
+
 type Service struct {
-	mu           sync.Mutex
-	models       map[string]*roundRobin
-	health       map[string]*endpointHealth
-	healthConfig BackendHealthConfig
-	now          func() time.Time
-	regular      *http.Client
-	streaming    *http.Client
-	bufferPool   sync.Pool
+	mu                    sync.Mutex
+	models                map[string]*roundRobin
+	sources               map[string]map[string]registeredEndpoint
+	health                map[string]*endpointHealth
+	healthConfig          BackendHealthConfig
+	responseHeaderTimeout time.Duration
+	now                   func() time.Time
+	regular               *http.Client
+	streaming             *http.Client
+	bufferPool            sync.Pool
 }
 
 func New(opts ...Option) *Service {
-	transport := &http.Transport{
+	service := &Service{
+		models:                make(map[string]*roundRobin),
+		sources:               make(map[string]map[string]registeredEndpoint),
+		health:                make(map[string]*endpointHealth),
+		healthConfig:          normalizeBackendHealthConfig(BackendHealthConfig{Enabled: true}),
+		responseHeaderTimeout: defaultResponseHeaderTimeout,
+		now:                   time.Now,
+		bufferPool: sync.Pool{New: func() any {
+			buffer := make([]byte, 32*1024)
+			return &buffer
+		}},
+	}
+	for _, opt := range opts {
+		opt(service)
+	}
+
+	baseTransport := &http.Transport{
 		Proxy:                 http.ProxyFromEnvironment,
 		DialContext:           (&net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
 		ForceAttemptHTTP2:     true,
@@ -84,24 +230,16 @@ func New(opts ...Option) *Service {
 		MaxIdleConnsPerHost:   512,
 		IdleConnTimeout:       90 * time.Second,
 		TLSHandshakeTimeout:   10 * time.Second,
-		ResponseHeaderTimeout: 30 * time.Second,
+		ResponseHeaderTimeout: 0,
 		ExpectContinueTimeout: 1 * time.Second,
 	}
+	transport := &responseHeaderTimeoutTransport{
+		base:    baseTransport,
+		timeout: service.responseHeaderTimeout,
+	}
 
-	service := &Service{
-		models:       make(map[string]*roundRobin),
-		health:       make(map[string]*endpointHealth),
-		healthConfig: normalizeBackendHealthConfig(BackendHealthConfig{Enabled: true}),
-		now:          time.Now,
-		regular:      &http.Client{Transport: transport, Timeout: 30 * time.Second},
-		streaming:    &http.Client{Transport: transport},
-		bufferPool: sync.Pool{New: func() any {
-			return make([]byte, 32*1024)
-		}},
-	}
-	for _, opt := range opts {
-		opt(service)
-	}
+	service.regular = &http.Client{Transport: transport}
+	service.streaming = &http.Client{Transport: transport}
 	return service
 }
 
@@ -119,45 +257,214 @@ func (s *Service) AddInstance(endpoint string, apiKey string, models []string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if s.health[endpoint] == nil {
-		s.health[endpoint] = &endpointHealth{}
+	source := cloneSource(s.sources[StaticSourceID])
+	registration := source[endpoint]
+	registration.APIKey = apiKey
+	if registration.Models == nil {
+		registration.Models = make(map[string]struct{})
 	}
 	for _, model := range models {
-		bucket := s.models[model]
-		if bucket == nil {
-			bucket = &roundRobin{}
-			s.models[model] = bucket
+		if model != "" {
+			registration.Models[model] = struct{}{}
 		}
-		bucket.add(Endpoint{URL: endpoint, APIKey: apiKey})
 	}
+	source[endpoint] = registration
+	_ = s.replaceSourceLocked(StaticSourceID, source)
 }
 
 func (s *Service) RemoveInstance(endpoint string, models []string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	targetModels := models
-	if targetModels == nil {
-		targetModels = make([]string, 0, len(s.models))
-		for model := range s.models {
-			targetModels = append(targetModels, model)
+	source := cloneSource(s.sources[StaticSourceID])
+	registration, ok := source[endpoint]
+	if !ok {
+		return
+	}
+	if models == nil {
+		delete(source, endpoint)
+	} else {
+		for _, model := range models {
+			delete(registration.Models, model)
+		}
+		if len(registration.Models) == 0 {
+			delete(source, endpoint)
+		} else {
+			source[endpoint] = registration
+		}
+	}
+	_ = s.replaceSourceLocked(StaticSourceID, source)
+}
+
+func (s *Service) ReplaceSource(sourceID string, endpoints []discovery.Endpoint) error {
+	if sourceID == "" {
+		return errors.New("source ID is required")
+	}
+
+	source, err := normalizeSource(endpoints)
+	if err != nil {
+		return err
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.replaceSourceLocked(sourceID, source)
+}
+
+func (s *Service) RemoveSource(sourceID string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_ = s.replaceSourceLocked(sourceID, nil)
+}
+
+func normalizeSource(endpoints []discovery.Endpoint) (map[string]registeredEndpoint, error) {
+	source := make(map[string]registeredEndpoint)
+	for _, endpoint := range endpoints {
+		if endpoint.URL == "" || len(endpoint.Models) == 0 {
+			continue
+		}
+		apiKey := endpoint.APIKey
+		if apiKey == "" {
+			apiKey = discovery.DefaultAPIKey
+		}
+
+		registration := source[endpoint.URL]
+		if registration.APIKey != "" && registration.APIKey != apiKey {
+			return nil, fmt.Errorf("source declares conflicting API keys for endpoint %q", endpoint.URL)
+		}
+		registration.APIKey = apiKey
+		if registration.Models == nil {
+			registration.Models = make(map[string]struct{})
+		}
+		for _, model := range endpoint.Models {
+			if model != "" {
+				registration.Models[model] = struct{}{}
+			}
+		}
+		if len(registration.Models) > 0 {
+			source[endpoint.URL] = registration
+		}
+	}
+	return source, nil
+}
+
+func cloneSource(source map[string]registeredEndpoint) map[string]registeredEndpoint {
+	cloned := make(map[string]registeredEndpoint, len(source))
+	for endpoint, registration := range source {
+		models := make(map[string]struct{}, len(registration.Models))
+		for model := range registration.Models {
+			models[model] = struct{}{}
+		}
+		cloned[endpoint] = registeredEndpoint{APIKey: registration.APIKey, Models: models}
+	}
+	return cloned
+}
+
+func sourcesEqual(a map[string]registeredEndpoint, b map[string]registeredEndpoint) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for endpoint, registration := range a {
+		other, ok := b[endpoint]
+		if !ok || registration.APIKey != other.APIKey || len(registration.Models) != len(other.Models) {
+			return false
+		}
+		for model := range registration.Models {
+			if _, ok := other.Models[model]; !ok {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+func (s *Service) replaceSourceLocked(sourceID string, source map[string]registeredEndpoint) error {
+	if sourcesEqual(s.sources[sourceID], source) {
+		return nil
+	}
+
+	candidate := make(map[string]map[string]registeredEndpoint, len(s.sources)+1)
+	for id, existing := range s.sources {
+		candidate[id] = existing
+	}
+	if len(source) == 0 {
+		delete(candidate, sourceID)
+	} else {
+		candidate[sourceID] = source
+	}
+
+	materialized, err := materializeSources(candidate)
+	if err != nil {
+		return err
+	}
+	s.sources = candidate
+	s.applyMaterializedLocked(materialized)
+	return nil
+}
+
+func materializeSources(sources map[string]map[string]registeredEndpoint) (map[string]map[string]Endpoint, error) {
+	models := make(map[string]map[string]Endpoint)
+	apiKeys := make(map[string]string)
+	for sourceID, source := range sources {
+		for endpointURL, registration := range source {
+			if existing, ok := apiKeys[endpointURL]; ok && existing != registration.APIKey {
+				return nil, fmt.Errorf("source %q conflicts with another API key for endpoint %q", sourceID, endpointURL)
+			}
+			apiKeys[endpointURL] = registration.APIKey
+			for model := range registration.Models {
+				if models[model] == nil {
+					models[model] = make(map[string]Endpoint)
+				}
+				models[model][endpointURL] = Endpoint{URL: endpointURL, APIKey: registration.APIKey}
+			}
+		}
+	}
+	return models, nil
+}
+
+func (s *Service) applyMaterializedLocked(next map[string]map[string]Endpoint) {
+	for model, bucket := range s.models {
+		desired := next[model]
+		for _, endpoint := range append([]Endpoint(nil), bucket.endpoints...) {
+			if _, ok := desired[endpoint.URL]; !ok {
+				bucket.remove(endpoint.URL)
+			}
+		}
+		if bucket.len() == 0 {
+			delete(s.models, model)
 		}
 	}
 
-	for _, model := range targetModels {
+	registeredURLs := make(map[string]struct{})
+	for model, desired := range next {
 		bucket := s.models[model]
 		if bucket == nil {
-			continue
+			bucket = &roundRobin{}
+			s.models[model] = bucket
 		}
-		bucket.remove(endpoint)
-		if bucket.len() == 0 {
-			delete(s.models, model)
+		urls := make([]string, 0, len(desired))
+		for endpointURL := range desired {
+			urls = append(urls, endpointURL)
+		}
+		sort.Strings(urls)
+		for _, endpointURL := range urls {
+			bucket.add(desired[endpointURL])
+			registeredURLs[endpointURL] = struct{}{}
+			if s.health[endpointURL] == nil {
+				s.health[endpointURL] = &endpointHealth{}
+			}
+		}
+	}
+	for endpointURL := range s.health {
+		if _, ok := registeredURLs[endpointURL]; !ok {
+			delete(s.health, endpointURL)
 		}
 	}
 }
 
 func (s *Service) PickEndpoint(model string) (Endpoint, bool) {
-	return s.pickEndpoint(model, nil)
+	endpoint, _, ok := s.pickEndpoint(model, nil, true)
+	return endpoint, ok
 }
 
 func (s *Service) ListModels() openai.ModelListResponse {
@@ -187,102 +494,69 @@ func (s *Service) ListModels() openai.ModelListResponse {
 
 func (s *Service) Forward(w http.ResponseWriter, r *http.Request, rawBody []byte, model string, stream bool) error {
 	if stream {
-		return s.forwardStreaming(w, r, rawBody, model)
+		return s.forward(w, r, rawBody, model, compressionStreaming, streamingExcludedResponseHeaders)
 	}
-	return s.forwardRegular(w, r, rawBody, model)
+	return s.forward(w, r, rawBody, model, compressionRegular, regularExcludedResponseHeaders)
 }
 
-func (s *Service) forwardRegular(w http.ResponseWriter, r *http.Request, rawBody []byte, model string) error {
+func (s *Service) forward(w http.ResponseWriter, r *http.Request, rawBody []byte, model string, compression compressionMode, excludedHeaders map[string]struct{}) error {
 	attempted := make(map[string]struct{})
-	var lastErr error
-	var lastResp *http.Response
-	var lastBody []byte
-
-	for {
-		endpoint, ok := s.pickEndpoint(model, attempted)
-		if !ok {
-			if len(attempted) == 0 {
-				return &HTTPError{StatusCode: http.StatusNotFound, Detail: fmt.Sprintf("Unknown model: %q", model)}
-			}
-			if lastResp != nil {
-				writeUpstreamResponse(w, lastResp, lastBody, regularExcludedResponseHeaders)
-				return nil
-			}
-			return lastErr
-		}
-		attempted[endpoint.URL] = struct{}{}
-
-		resp, body, err := s.fetchRegular(r, rawBody, endpoint)
-		if err != nil {
-			s.recordFailure(endpoint.URL)
-			lastErr = err
-			continue
-		}
-
-		if s.statusCountsAsFailure(resp.StatusCode) {
-			s.recordFailure(endpoint.URL)
-			lastResp = resp
-			lastBody = body
-			continue
-		}
-
-		s.recordSuccess(endpoint.URL)
-		writeUpstreamResponse(w, resp, body, regularExcludedResponseHeaders)
-		return nil
-	}
-}
-
-func (s *Service) fetchRegular(r *http.Request, rawBody []byte, endpoint Endpoint) (*http.Response, []byte, error) {
-	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
-	defer cancel()
-
-	upstreamReq, err := buildUpstreamRequest(ctx, r, rawBody, endpoint, compressionRegular)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	resp, err := s.regular.Do(upstreamReq)
-	if err != nil {
-		return nil, nil, err
-	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	return resp, body, nil
-}
-
-func (s *Service) forwardStreaming(w http.ResponseWriter, r *http.Request, rawBody []byte, model string) error {
-	attempted := make(map[string]struct{})
+	allowQuarantined := true
+	retryHeaderTimeout := retryResponseHeaderTimeout(r.Header)
+	sawHeaderTimeout := false
 	var lastErr error
 	var lastResp *http.Response
 	var lastEndpoint Endpoint
 
 	for {
-		endpoint, ok := s.pickEndpoint(model, attempted)
+		endpoint, quarantined, ok := s.pickEndpoint(model, attempted, allowQuarantined)
 		if !ok {
 			if len(attempted) == 0 {
 				return &HTTPError{StatusCode: http.StatusNotFound, Detail: fmt.Sprintf("Unknown model: %q", model)}
 			}
+			if sawHeaderTimeout {
+				if lastResp != nil {
+					_ = lastResp.Body.Close()
+				}
+				return responseHeaderTimeoutFailure()
+			}
 			if lastResp != nil {
-				s.streamResponse(w, lastResp, lastEndpoint)
+				s.streamResponse(w, r, lastResp, lastEndpoint, false, excludedHeaders)
 				return nil
 			}
-			return lastErr
+			if r.Context().Err() != nil {
+				return r.Context().Err()
+			}
+			return upstreamFailure(lastErr)
+		}
+		if quarantined {
+			allowQuarantined = false
 		}
 		attempted[endpoint.URL] = struct{}{}
 
-		resp, err := s.openStreaming(r, rawBody, endpoint)
+		resp, err := s.openUpstream(r, rawBody, endpoint, compression)
 		if err != nil {
+			if requestEnded(r) {
+				if lastResp != nil {
+					_ = lastResp.Body.Close()
+				}
+				return r.Context().Err()
+			}
 			s.recordFailure(endpoint.URL)
 			lastErr = err
+			if isResponseHeaderTimeout(err) {
+				sawHeaderTimeout = true
+				if !retryHeaderTimeout {
+					if lastResp != nil {
+						_ = lastResp.Body.Close()
+					}
+					return responseHeaderTimeoutFailure()
+				}
+			}
 			continue
 		}
 
-		if s.statusCountsAsFailure(resp.StatusCode) {
+		if s.statusIsRetryable(resp.StatusCode) {
 			s.recordFailure(endpoint.URL)
 			if lastResp != nil {
 				_ = lastResp.Body.Close()
@@ -292,37 +566,37 @@ func (s *Service) forwardStreaming(w http.ResponseWriter, r *http.Request, rawBo
 			continue
 		}
 
-		s.recordSuccess(endpoint.URL)
 		if lastResp != nil {
 			_ = lastResp.Body.Close()
 		}
-		s.streamResponse(w, resp, endpoint)
+		s.streamResponse(w, r, resp, endpoint, true, excludedHeaders)
 		return nil
 	}
 }
 
-func (s *Service) openStreaming(r *http.Request, rawBody []byte, endpoint Endpoint) (*http.Response, error) {
-	upstreamReq, err := buildUpstreamRequest(r.Context(), r, rawBody, endpoint, compressionStreaming)
+func (s *Service) openUpstream(r *http.Request, rawBody []byte, endpoint Endpoint, compression compressionMode) (*http.Response, error) {
+	upstreamReq, err := buildUpstreamRequest(r.Context(), r, rawBody, endpoint, compression)
 	if err != nil {
 		return nil, err
 	}
 
-	resp, err := s.streaming.Do(upstreamReq)
-	if err != nil {
-		return nil, err
+	client := s.regular
+	if compression == compressionStreaming {
+		client = s.streaming
 	}
-	return resp, nil
+	return client.Do(upstreamReq)
 }
 
-func (s *Service) streamResponse(w http.ResponseWriter, resp *http.Response, endpoint Endpoint) {
-	defer resp.Body.Close()
+func (s *Service) streamResponse(w http.ResponseWriter, r *http.Request, resp *http.Response, endpoint Endpoint, trackHealth bool, excludedHeaders map[string]struct{}) {
+	defer func() { _ = resp.Body.Close() }()
 
-	copyResponseHeaders(w.Header(), resp.Header, streamingExcludedResponseHeaders)
+	copyResponseHeaders(w.Header(), resp.Header, excludedHeaders)
 	w.WriteHeader(resp.StatusCode)
 
 	flusher, _ := w.(http.Flusher)
-	buf := s.bufferPool.Get().([]byte)
-	defer s.bufferPool.Put(buf)
+	buffer := s.bufferPool.Get().(*[]byte)
+	defer s.bufferPool.Put(buffer)
+	buf := *buffer
 
 	for {
 		n, readErr := resp.Body.Read(buf)
@@ -338,26 +612,56 @@ func (s *Service) streamResponse(w http.ResponseWriter, resp *http.Response, end
 			continue
 		}
 		if readErr == io.EOF {
+			if trackHealth {
+				s.recordSuccess(endpoint.URL)
+			}
 			return
 		}
-		s.recordFailure(endpoint.URL)
+		if trackHealth && r.Context().Err() == nil {
+			s.recordFailure(endpoint.URL)
+		}
 		return
 	}
 }
 
-func writeUpstreamResponse(w http.ResponseWriter, resp *http.Response, body []byte, excluded map[string]struct{}) {
-	copyResponseHeaders(w.Header(), resp.Header, excluded)
-	w.WriteHeader(resp.StatusCode)
-	_, _ = w.Write(body)
+func requestEnded(r *http.Request) bool {
+	return r.Context().Err() != nil
 }
 
-func (s *Service) pickEndpoint(model string, attempted map[string]struct{}) (Endpoint, bool) {
+func upstreamFailure(err error) error {
+	if err == nil {
+		return &HTTPError{StatusCode: http.StatusBadGateway, Detail: "No upstream endpoint was available"}
+	}
+	return &HTTPError{StatusCode: http.StatusBadGateway, Detail: "All upstream endpoint attempts failed"}
+}
+
+func responseHeaderTimeoutFailure() error {
+	return &HTTPError{StatusCode: http.StatusGatewayTimeout, Detail: responseHeaderTimeoutErrorDetail}
+}
+
+func isResponseHeaderTimeout(err error) bool {
+	var upstreamErr *upstreamError
+	return errors.As(err, &upstreamErr) && upstreamErr.kind == upstreamErrorResponseHeaderTimeout
+}
+
+func retryResponseHeaderTimeout(headers http.Header) bool {
+	for _, value := range headers.Values(RetryHeader) {
+		for _, token := range strings.Split(value, ",") {
+			if strings.EqualFold(strings.TrimSpace(token), RetryResponseHeaderTimeout) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func (s *Service) pickEndpoint(model string, attempted map[string]struct{}, allowQuarantined bool) (Endpoint, bool, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	bucket := s.models[model]
 	if bucket == nil {
-		return Endpoint{}, false
+		return Endpoint{}, false, false
 	}
 
 	now := s.now()
@@ -368,13 +672,28 @@ func (s *Service) pickEndpoint(model string, attempted map[string]struct{}) (End
 		return s.endpointAvailableLocked(endpoint.URL, now)
 	})
 	if ok {
-		return endpoint, true
+		return endpoint, false, true
+	}
+	if !allowQuarantined {
+		return Endpoint{}, false, false
 	}
 
-	return bucket.pickWhere(func(endpoint Endpoint) bool {
+	endpoint, ok = bucket.pickWhere(func(endpoint Endpoint) bool {
 		_, seen := attempted[endpoint.URL]
 		return !seen
 	})
+	return endpoint, ok, ok
+}
+
+func (s *Service) endpointRegisteredLocked(endpoint string) bool {
+	for _, bucket := range s.models {
+		for _, candidate := range bucket.endpoints {
+			if candidate.URL == endpoint {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func (s *Service) endpointAvailableLocked(endpoint string, now time.Time) bool {
@@ -398,6 +717,9 @@ func (s *Service) recordFailure(endpoint string) {
 
 	health := s.health[endpoint]
 	if health == nil {
+		if !s.endpointRegisteredLocked(endpoint) {
+			return
+		}
 		health = &endpointHealth{}
 		s.health[endpoint] = health
 	}
@@ -423,10 +745,7 @@ func (s *Service) recordSuccess(endpoint string) {
 	health.unavailableUntil = time.Time{}
 }
 
-func (s *Service) statusCountsAsFailure(statusCode int) bool {
-	if !s.healthConfig.Enabled {
-		return false
-	}
+func (s *Service) statusIsRetryable(statusCode int) bool {
 	switch statusCode {
 	case http.StatusBadGateway, http.StatusServiceUnavailable, http.StatusGatewayTimeout:
 		return true
@@ -454,6 +773,7 @@ func buildUpstreamRequest(ctx context.Context, original *http.Request, rawBody [
 
 var excludedRequestHeaders = map[string]struct{}{
 	"accept-encoding":     {},
+	"borg-retry":          {},
 	"host":                {},
 	"content-length":      {},
 	"connection":          {},
@@ -470,6 +790,7 @@ var excludedRequestHeaders = map[string]struct{}{
 var regularExcludedResponseHeaders = map[string]struct{}{
 	"connection":          {},
 	"content-encoding":    {},
+	"content-length":      {},
 	"keep-alive":          {},
 	"proxy-authenticate":  {},
 	"proxy-authorization": {},

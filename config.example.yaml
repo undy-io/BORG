@@ -10,6 +10,9 @@ borg:
       failure_threshold: 3
       cooldown_seconds: 30
       eject_on_500: false
+    upstream:
+      # Time to wait after upload for final response headers; 0 means unlimited.
+      response_header_timeout_seconds: 300
     instances:
       # - endpoint: "http://10.0.0.5:8000"
       #   apikey: "sk‑examplekey123"
@@ -19,6 +22,26 @@ borg:
       #   apikey: "sk‑anotherkey456"
       #   models: ["gpt-4o", "gpt-4o-mini"]
     k8s_discover:
-      # - namespace: vllm-servers
+      # - id: vllm-pods
+      #   namespace: vllm-servers
       #   selector: borg/expose=vllm
+      #   modelkey: borg/models
+    k8s_service_discover:
+      # Register an llm-d scheduler/router Service as one upstream endpoint.
+      # - id: qwen-router
+      #   namespace: llm-d
+      #   service_name: qwen-inference-scheduler
+      #   port_name: http
+      #   models: ["Qwen/Qwen3-32B"]
+      #   # Instead of explicit models, BORG can call the router's model API.
+      #   automodel: true
+      #   models_path: /v1/models
+      #   apikeyEnv: LLMD_API_KEY
+
+      # A label selector can discover multiple router Services. Each Service is
+      # still treated as a front door, not expanded into its backing pods.
+      # - id: llmd-routers
+      #   namespace: llm-d
+      #   selector: llm-d.ai/inferenceServing=true
+      #   port_name: http
       #   modelkey: borg/models

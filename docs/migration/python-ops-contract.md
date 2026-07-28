@@ -175,7 +175,6 @@ Go guidance:
 The auth secret template supports three behaviors:
 
 - reuse existing secret value on upgrade
-- migrate legacy raw 32-byte secret content into text-safe form
 - accept operator-supplied printable auth key text
 
 The API-key secret template:
@@ -183,7 +182,7 @@ The API-key secret template:
 - stores the instance `apikey`, defaulting to `EMPTY`
 
 Operational contract:
-- The auth secret should continue to support both migrated legacy raw-byte content and printable auth-key strings because runtime tooling already accepts both.
+- Auth Secret values supplied to the runtime must be printable URL-safe auth-key text.
 
 ### RBAC contract
 The chart provisions:

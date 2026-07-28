@@ -135,7 +135,7 @@ Kubernetes discovery:
 
 Token utility:
 - reads ConfigMap defaults and Secret auth keys with `client-go`
-- supports printable URL-safe auth key text and legacy raw 32-byte Secret data
+- expects printable URL-safe auth key text in externally managed Secrets
 - mints AES-256-GCM bearer tokens using plaintext `auth_prefix + username`
 
 ## Documentation Map

@@ -109,24 +109,25 @@ func TestAuthKeyMustUseURLSafeBase64(t *testing.T) {
 	}
 }
 
-func TestDecodeSecretKeySupportsTextAndLegacyRawSecrets(t *testing.T) {
+func TestDecodeSecretKeySupportsPaddedAndUnpaddedText(t *testing.T) {
 	rawKey := []byte("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
-	textKey := base64.URLEncoding.EncodeToString(rawKey)
+	for _, textKey := range []string{
+		base64.URLEncoding.EncodeToString(rawKey),
+		base64.RawURLEncoding.EncodeToString(rawKey),
+	} {
+		decoded, err := DecodeSecretKey([]byte(textKey))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(decoded) != string(rawKey) {
+			t.Fatalf("expected text key to decode to raw key")
+		}
+	}
+}
 
-	decoded, err := DecodeSecretKey([]byte(textKey))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(decoded) != string(rawKey) {
-		t.Fatalf("expected text key to decode to raw key")
-	}
-
-	decoded, err = DecodeSecretKey(rawKey)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(decoded) != string(rawKey) {
-		t.Fatalf("expected raw key to be returned")
+func TestDecodeSecretKeyRejectsRawKey(t *testing.T) {
+	if _, err := DecodeSecretKey([]byte("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")); err == nil {
+		t.Fatal("expected raw Secret key to be rejected")
 	}
 }
 

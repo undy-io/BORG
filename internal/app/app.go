@@ -15,7 +15,7 @@ import (
 	"github.com/undy-io/BORG/internal/proxy"
 )
 
-type DiscoveryFactory func([]config.DiscoverySelector) (discovery.Discoverer, error)
+type DiscoveryFactory func(*config.Runtime) ([]discovery.Source, error)
 
 type Options struct {
 	DiscoveryFactory DiscoveryFactory
@@ -52,9 +52,17 @@ func NewWithOptions(configPath string, opts Options) (*App, error) {
 		FailureThreshold: runtime.BackendHealth.FailureThreshold,
 		Cooldown:         time.Duration(runtime.BackendHealth.CooldownSeconds) * time.Second,
 		EjectOn500:       runtime.BackendHealth.EjectOn500,
-	}))
+	}), proxy.WithResponseHeaderTimeout(time.Duration(runtime.Upstream.ResponseHeaderTimeoutSeconds)*time.Second))
+	staticEndpoints := make([]discovery.Endpoint, 0, len(runtime.Instances))
 	for _, inst := range runtime.Instances {
-		proxyService.AddInstance(inst.Endpoint, inst.APIKey, inst.Models)
+		staticEndpoints = append(staticEndpoints, discovery.Endpoint{
+			URL:    inst.Endpoint,
+			APIKey: inst.APIKey,
+			Models: inst.Models,
+		})
+	}
+	if err := proxyService.ReplaceSource(proxy.StaticSourceID, staticEndpoints); err != nil {
+		return nil, err
 	}
 
 	borgApp := &App{
@@ -72,54 +80,71 @@ func (o Options) discoveryFactory() DiscoveryFactory {
 	if o.DiscoveryFactory != nil {
 		return o.DiscoveryFactory
 	}
-	return func(selectors []config.DiscoverySelector) (discovery.Discoverer, error) {
-		return k8sdiscovery.New(selectors)
+	return func(runtime *config.Runtime) ([]discovery.Source, error) {
+		return k8sdiscovery.NewSources(runtime)
 	}
 }
 
 func (a *App) startDiscovery(runtime *config.Runtime, factory DiscoveryFactory) {
-	if runtime.UpdateInterval <= 0 || len(runtime.K8SDiscover) == 0 {
+	if runtime.UpdateInterval <= 0 || len(runtime.K8SDiscover)+len(runtime.K8SServiceDiscover) == 0 {
 		return
 	}
 
-	discoverer, err := factory(runtime.K8SDiscover)
+	sources, err := factory(runtime)
 	if err != nil {
 		log.Printf("Failed to load k8s discovery service: %v", err)
 		return
 	}
-	if discoverer == nil {
-		log.Printf("Failed to load k8s discovery service: discovery factory returned nil")
+	if len(sources) == 0 {
+		log.Printf("Failed to load k8s discovery service: discovery factory returned no sources")
+		return
+	}
+	type namedReconciler struct {
+		id         string
+		reconciler *discovery.Reconciler
+	}
+	reconcilers := make([]namedReconciler, 0, len(sources))
+	for _, source := range sources {
+		if source.ID == "" || source.Discoverer == nil {
+			log.Printf("Skipping invalid Kubernetes discovery source %q", source.ID)
+			continue
+		}
+		reconcilers = append(reconcilers, namedReconciler{
+			id:         source.ID,
+			reconciler: discovery.NewReconciler(source.ID, source.Discoverer),
+		})
+	}
+	if len(reconcilers) == 0 {
 		return
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	a.cancel = cancel
-	reconciler := discovery.NewReconciler(discoverer)
 	interval := time.Duration(runtime.UpdateInterval) * time.Second
 
-	a.wg.Add(1)
-	go func() {
-		defer a.wg.Done()
+	for _, source := range reconcilers {
+		source := source
+		a.wg.Add(1)
+		go func() {
+			defer a.wg.Done()
 
-		run := func() {
-			if err := reconciler.Update(ctx, a.Proxy); err != nil && ctx.Err() == nil {
-				log.Printf("Discovery refresh failed; preserving previous endpoint snapshot: %v", err)
+			for {
+				if err := source.reconciler.Update(ctx, a.Proxy); err != nil && ctx.Err() == nil {
+					log.Printf("Discovery source %q refresh failed; preserving its previous endpoint snapshot: %v", source.id, err)
+				}
+
+				timer := time.NewTimer(interval)
+				select {
+				case <-ctx.Done():
+					if !timer.Stop() {
+						<-timer.C
+					}
+					return
+				case <-timer.C:
+				}
 			}
-		}
-
-		run()
-		ticker := time.NewTicker(interval)
-		defer ticker.Stop()
-
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				run()
-			}
-		}
-	}()
+		}()
+	}
 }
 
 func (a *App) Close() {

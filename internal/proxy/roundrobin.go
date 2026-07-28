@@ -32,10 +32,6 @@ func (r *roundRobin) remove(url string) {
 	}
 }
 
-func (r *roundRobin) pick() (Endpoint, bool) {
-	return r.pickWhere(func(Endpoint) bool { return true })
-}
-
 func (r *roundRobin) pickWhere(eligible func(Endpoint) bool) (Endpoint, bool) {
 	if len(r.endpoints) == 0 {
 		return Endpoint{}, false

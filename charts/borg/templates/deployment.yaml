@@ -4,6 +4,45 @@
 {{- $serverTLS := .Values.server.tls.enabled -}}
 {{- $portName := ternary "https" "http" $serverTLS -}}
 {{- $probeScheme := ternary "HTTPS" "HTTP" $serverTLS -}}
+{{- $backendEntries := concat (default (list) .Values.config.instances) (default (list) .Values.config.k8s_service_discover) -}}
+{{- $envNamePattern := "^[A-Za-z_][A-Za-z0-9_]*$" -}}
+{{- $authEnv := .Values.authKeySecret.key | required "authKeySecret.key must be set" -}}
+{{- if not (regexMatch $envNamePattern $authEnv) -}}
+{{- fail (printf "authKeySecret.key %q must be a portable environment variable name" $authEnv) -}}
+{{- end -}}
+{{- if has $authEnv (list "PORT" "PROXY_CONFIG" "API_KEY" "TLS_CERT_FILE" "TLS_KEY_FILE") -}}
+{{- fail (printf "authKeySecret.key %q is reserved by BORG" $authEnv) -}}
+{{- end -}}
+{{- $backendReserved := list "PORT" "PROXY_CONFIG" "AUTH_KEY" "BORG_AUTH_KEY" "TLS_CERT_FILE" "TLS_KEY_FILE" -}}
+{{- range $backendEntries -}}
+{{- if .apikeyEnv -}}
+{{- if not (regexMatch $envNamePattern .apikeyEnv) -}}
+{{- fail (printf "apikeyEnv %q must be a portable environment variable name" .apikeyEnv) -}}
+{{- end -}}
+{{- if or (has .apikeyEnv $backendReserved) (eq .apikeyEnv $authEnv) -}}
+{{- fail (printf "apikeyEnv %q collides with a BORG environment variable" .apikeyEnv) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- $podAnnotations := deepCopy (default (dict) .Values.podAnnotations) -}}
+{{- $authChecksumInput := dict "create" .Values.authKeySecret.create "existingSecret" .Values.authKeySecret.existingSecret "name" .Values.authKeySecret.name "key" $authEnv "value" (default "" .Values.authKeySecret.value) -}}
+{{- $backendCredentials := dict -}}
+{{- $createAPIKeySecret := and .Values.apikeySecrets.create (not .Values.apikeySecrets.existingSecret) -}}
+{{- if $createAPIKeySecret -}}
+{{- range $backendEntries -}}
+{{- if .apikeyEnv -}}
+{{- $value := required (printf "apikey is required for %s when apikeySecrets.create=true" .apikeyEnv) .apikey -}}
+{{- if and (hasKey $backendCredentials .apikeyEnv) (ne (get $backendCredentials .apikeyEnv) $value) -}}
+{{- fail (printf "conflicting apikey values for apikeyEnv %s" .apikeyEnv) -}}
+{{- end -}}
+{{- $_ := set $backendCredentials .apikeyEnv $value -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- $backendChecksumInput := dict "create" .Values.apikeySecrets.create "existingSecret" .Values.apikeySecrets.existingSecret "name" .Values.apikeySecrets.name "credentials" $backendCredentials -}}
+{{- $_ := set $podAnnotations "checksum.borg.undy.io/config" (include (print $.Template.BasePath "/config.yaml") . | sha256sum) -}}
+{{- $_ := set $podAnnotations "checksum.borg.undy.io/auth" (toJson $authChecksumInput | sha256sum) -}}
+{{- $_ := set $podAnnotations "checksum.borg.undy.io/backend-credentials" (toJson $backendChecksumInput | sha256sum) -}}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -25,6 +64,8 @@ spec:
       labels:
         app: {{ include "borg.name" . }}
         release: {{ .Release.Name }}
+      annotations:
+{{ toYaml $podAnnotations | indent 8 }}
     spec:
       serviceAccountName: {{ include "borg.serviceAccountName" . }}
       {{- with .Values.podSecurityContext }}
@@ -48,24 +89,26 @@ spec:
               value: "{{ .Values.service.targetPort }}"
             - name: PROXY_CONFIG
               value: /app/config.yaml
-            - name: {{ .Values.authKeySecret.key }}
+            - name: {{ .Values.authKeySecret.key | quote }}
               valueFrom:
                 secretKeyRef:
                   name: {{ include "borg.authSecretName" . }}
-                  key: {{ .Values.authKeySecret.key }}
+                  key: {{ .Values.authKeySecret.key | quote }}
             {{- if $serverTLS }}
             - name: TLS_CERT_FILE
               value: {{ printf "%s/%s" .Values.server.tls.mountPath .Values.server.tls.certKey | quote }}
             - name: TLS_KEY_FILE
               value: {{ printf "%s/%s" .Values.server.tls.mountPath .Values.server.tls.privateKeyKey | quote }}
             {{- end }}
-            {{- range .Values.config.instances }}
-            {{- if .apikeyEnv }}
-            - name: {{ .apikeyEnv }}
+            {{- $seenAPIKeyEnvs := dict }}
+            {{- range $backendEntries }}
+            {{- if and .apikeyEnv (not (hasKey $seenAPIKeyEnvs .apikeyEnv)) }}
+            {{- $_ := set $seenAPIKeyEnvs .apikeyEnv true }}
+            - name: {{ .apikeyEnv | quote }}
               valueFrom:
                 secretKeyRef:
-                  name: {{ $.Values.apikeySecrets.name }}
-                  key: {{ .apikeyEnv }}
+                  name: {{ include "borg.apiKeySecretName" $ }}
+                  key: {{ .apikeyEnv | quote }}
             {{- end }}
             {{- end }}
           volumeMounts:

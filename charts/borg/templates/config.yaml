@@ -1,26 +1,57 @@
+{{- $instances := list -}}
+{{- range .Values.config.instances -}}
+{{- if and .apikey (not .apikeyEnv) -}}
+{{- fail "config.instances entries with apikey must also set apikeyEnv" -}}
+{{- end -}}
+{{- $entry := deepCopy . -}}
+{{- if .apikeyEnv -}}
+{{- $entry = omit $entry "apikey" -}}
+{{- end -}}
+{{- $instances = append $instances $entry -}}
+{{- end -}}
+{{- $serviceDiscoveries := list -}}
+{{- range .Values.config.k8s_service_discover -}}
+{{- if and .apikey (not .apikeyEnv) -}}
+{{- fail "config.k8s_service_discover entries with apikey must also set apikeyEnv" -}}
+{{- end -}}
+{{- $entry := deepCopy . -}}
+{{- if .apikeyEnv -}}
+{{- $entry = omit $entry "apikey" -}}
+{{- end -}}
+{{- $serviceDiscoveries = append $serviceDiscoveries $entry -}}
+{{- end -}}
 apiVersion: v1
 kind: ConfigMap
 metadata:
   name: {{ include "borg.fullname" . }}-config
   namespace: {{ .Release.Namespace }}
 data:
+  auth-secret-name: {{ include "borg.authSecretName" . | quote }}
   config.yaml: |
     borg:
-      auth_key_from_env: {{ .Values.authKeySecret.key }}
-      auth_prefix: "{{ .Values.config.auth_prefix }}"
+      auth_key_from_env: {{ .Values.authKeySecret.key | quote }}
+      auth_prefix: {{ .Values.config.auth_prefix | quote }}
       update_interval: {{ .Values.config.update_interval }}
       max_request_body_bytes: {{ int64 .Values.config.max_request_body_bytes }}
       backend_health:
 {{ toYaml .Values.config.backend_health | indent 8 }}
+      upstream:
+{{ toYaml .Values.config.upstream | indent 8 }}
       instances:
-{{- if .Values.config.instances }}
-{{ toYaml .Values.config.instances | indent 8 }}
+{{- if $instances }}
+{{ toYaml $instances | indent 8 }}
 {{- else }}
         []
 {{- end }}
       k8s_discover:
 {{- if .Values.config.k8s_discover }}
 {{ toYaml .Values.config.k8s_discover | indent 8 }}
+{{- else }}
+        []
+{{- end }}
+      k8s_service_discover:
+{{- if $serviceDiscoveries }}
+{{ toYaml $serviceDiscoveries | indent 8 }}
 {{- else }}
         []
 {{- end }}

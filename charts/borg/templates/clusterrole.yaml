@@ -1,3 +1,10 @@
+{{- $discoveryResources := list }}
+{{- if .Values.config.k8s_discover }}
+{{- $discoveryResources = append $discoveryResources "pods" }}
+{{- end }}
+{{- if .Values.config.k8s_service_discover }}
+{{- $discoveryResources = append $discoveryResources "services" }}
+{{- end }}
 {{- if .Values.rbac.create }}
 {{- if .Values.rbac.clusterScoped }}
 apiVersion: rbac.authorization.k8s.io/v1
@@ -5,12 +12,15 @@ kind: ClusterRole
 metadata:
   name: {{ include "borg.fullname" . }}-role
 rules:
+  {{- if $discoveryResources }}
   - apiGroups: [""]
-    resources: ["pods"]
+    resources: {{ $discoveryResources | toJson }}
     verbs: ["get", "list"]
+  {{- end }}
   {{- with .Values.rbac.extraRules }}
 {{ toYaml . | indent 2 }}
   {{- end }}
+  {{- if and (not $discoveryResources) (not .Values.rbac.extraRules) }} []{{- end }}
 {{- else }}
 {{- if not .Values.rbac.namespaces }}
 {{- fail "rbac.namespaces must contain at least one namespace when rbac.clusterScoped=false" }}
@@ -25,12 +35,15 @@ metadata:
   name: {{ include "borg.fullname" $ }}-role
   namespace: {{ $namespace }}
 rules:
+  {{- if $discoveryResources }}
   - apiGroups: [""]
-    resources: ["pods"]
+    resources: {{ $discoveryResources | toJson }}
     verbs: ["get", "list"]
+  {{- end }}
   {{- with $.Values.rbac.extraRules }}
 {{ toYaml . | indent 2 }}
   {{- end }}
+  {{- if and (not $discoveryResources) (not $.Values.rbac.extraRules) }} []{{- end }}
 {{- end }}
 {{- end }}
 {{- end }}

@@ -142,7 +142,7 @@ func TestReloadingTLSConfigServesHTTPS(t *testing.T) {
 	}
 
 	serverConn, clientConn := net.Pipe()
-	defer clientConn.Close()
+	defer func() { _ = clientConn.Close() }()
 	deadline := time.Now().Add(5 * time.Second)
 	if err := serverConn.SetDeadline(deadline); err != nil {
 		t.Fatal(err)
@@ -155,7 +155,7 @@ func TestReloadingTLSConfigServesHTTPS(t *testing.T) {
 
 	serverErr := make(chan error, 1)
 	go func() {
-		defer serverTLS.Close()
+		defer func() { _ = serverTLS.Close() }()
 
 		if err := serverTLS.Handshake(); err != nil {
 			serverErr <- err
@@ -189,7 +189,7 @@ func TestReloadingTLSConfigServesHTTPS(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {

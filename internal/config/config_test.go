@@ -4,7 +4,10 @@ import (
 	"encoding/base64"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+
+	"github.com/undy-io/BORG/internal/discovery"
 )
 
 func TestResolvePathHostAndPort(t *testing.T) {
@@ -93,11 +96,114 @@ borg:
 	if runtime.BackendHealth.CooldownSeconds != 30 {
 		t.Fatalf("expected backend health cooldown 30, got %d", runtime.BackendHealth.CooldownSeconds)
 	}
+	if runtime.Upstream.ResponseHeaderTimeoutSeconds != DefaultResponseHeaderTimeout {
+		t.Fatalf("expected response-header timeout %d, got %d", DefaultResponseHeaderTimeout, runtime.Upstream.ResponseHeaderTimeoutSeconds)
+	}
 
 	assertInstanceKey(t, runtime.Instances, "http://upstream-one", "sk-env")
 	assertInstanceKey(t, runtime.Instances, "http://upstream-two", "sk-inline")
 	assertInstanceKey(t, runtime.Instances, "http://upstream-three", "sk-default")
 	assertInstanceKey(t, runtime.Instances, "http://upstream-four", "sk-inline-fallback")
+}
+
+func TestUpstreamResponseHeaderTimeoutConfiguration(t *testing.T) {
+	custom := 900
+	runtime, err := ResolveRuntime(&File{Borg: BorgConfig{
+		Upstream: UpstreamConfig{ResponseHeaderTimeoutSeconds: &custom},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runtime.Upstream.ResponseHeaderTimeoutSeconds != custom {
+		t.Fatalf("expected custom timeout %d, got %d", custom, runtime.Upstream.ResponseHeaderTimeoutSeconds)
+	}
+
+	unlimited := 0
+	runtime, err = ResolveRuntime(&File{Borg: BorgConfig{
+		Upstream: UpstreamConfig{ResponseHeaderTimeoutSeconds: &unlimited},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runtime.Upstream.ResponseHeaderTimeoutSeconds != 0 {
+		t.Fatalf("expected unlimited timeout, got %d", runtime.Upstream.ResponseHeaderTimeoutSeconds)
+	}
+
+	negative := -1
+	if _, err := ResolveRuntime(&File{Borg: BorgConfig{
+		Upstream: UpstreamConfig{ResponseHeaderTimeoutSeconds: &negative},
+	}}); err == nil {
+		t.Fatal("expected negative response-header timeout to fail")
+	}
+}
+
+func TestMaxRequestBodyBytesConfiguration(t *testing.T) {
+	tests := []struct {
+		name      string
+		value     *int64
+		want      int64
+		wantError bool
+	}{
+		{name: "omitted", want: DefaultMaxRequestBodyBytes},
+		{name: "unlimited", value: int64Pointer(0), want: 0},
+		{name: "positive", value: int64Pointer(1024), want: 1024},
+		{name: "negative", value: int64Pointer(-1), wantError: true},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			runtime, err := ResolveRuntime(&File{Borg: BorgConfig{
+				MaxRequestBodyBytes: test.value,
+			}})
+			if test.wantError {
+				if err == nil {
+					t.Fatal("expected negative request body limit to fail")
+				}
+				if !strings.Contains(err.Error(), "max_request_body_bytes") {
+					t.Fatalf("expected request body limit error, got %v", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if runtime.MaxRequestBodyBytes != test.want {
+				t.Fatalf("expected max request body bytes %d, got %d", test.want, runtime.MaxRequestBodyBytes)
+			}
+		})
+	}
+}
+
+func TestNegativeMaxRequestBodyBytesRejectedFromConfigFiles(t *testing.T) {
+	tests := []struct {
+		name    string
+		ext     string
+		content string
+	}{
+		{name: "YAML", ext: ".yaml", content: "borg:\n  max_request_body_bytes: -1\n"},
+		{name: "JSON", ext: ".json", content: `{"borg":{"max_request_body_bytes":-1}}`},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config"+test.ext)
+			writeFile(t, path, test.content)
+			_, err := Load(path)
+			if err == nil {
+				t.Fatal("expected negative request body limit to fail")
+			}
+			if !strings.Contains(err.Error(), "max_request_body_bytes") {
+				t.Fatalf("expected request body limit error, got %v", err)
+			}
+		})
+	}
+}
+
+func TestExampleConfigLoads(t *testing.T) {
+	path := filepath.Join("..", "..", "config.example.yaml")
+	if _, err := Load(path); err != nil {
+		t.Fatalf("load config.example.yaml: %v", err)
+	}
 }
 
 func TestRuntimeOptionalDefaultsCanBeOverridden(t *testing.T) {
@@ -130,6 +236,78 @@ borg:
 	}
 	if !runtime.BackendHealth.EjectOn500 {
 		t.Fatal("expected eject_on_500 to be true")
+	}
+}
+
+func TestDiscoverySourcesResolveDefaultsAndCredentials(t *testing.T) {
+	t.Setenv("LLMD_API_KEY", "sk-router")
+	runtime, err := ResolveRuntime(&File{Borg: BorgConfig{
+		K8SDiscover: []DiscoverySelector{{Namespace: "pods", Selector: "app=vllm", ModelKey: "borg/models"}},
+		K8SServiceDiscover: []ServiceDiscovery{{
+			ID:          "llmd-qwen",
+			Namespace:   "services",
+			ServiceName: "qwen-epp",
+			PortName:    "http",
+			APIKeyEnv:   "LLMD_API_KEY",
+		}},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := runtime.K8SDiscover[0].ID; got != "pods:pods:app=vllm:borg/models" {
+		t.Fatalf("unexpected derived pod source ID %q", got)
+	}
+	service := runtime.K8SServiceDiscover[0]
+	if service.ID != "llmd-qwen" || service.ServiceName != "qwen-epp" || service.ModelsPath != "/v1/models" || !service.Automodel {
+		t.Fatalf("unexpected resolved service discovery: %#v", service)
+	}
+	if service.APIKey != "sk-router" {
+		t.Fatalf("expected service API key from env, got %q", service.APIKey)
+	}
+}
+
+func TestServiceDiscoveryValidation(t *testing.T) {
+	tests := []struct {
+		name    string
+		service ServiceDiscovery
+	}{
+		{name: "missing id", service: ServiceDiscovery{ServiceName: "router"}},
+		{name: "missing target", service: ServiceDiscovery{ID: "router"}},
+		{name: "name and selector", service: ServiceDiscovery{ID: "router", ServiceName: "router", Selector: "app=router"}},
+		{name: "port conflict", service: ServiceDiscovery{ID: "router", ServiceName: "router", Port: 80, PortName: "http"}},
+		{name: "bad protocol", service: ServiceDiscovery{ID: "router", ServiceName: "router", Protocol: "grpc"}},
+		{name: "bad api base", service: ServiceDiscovery{ID: "router", ServiceName: "router", APIBase: "openai"}},
+		{name: "bad models path", service: ServiceDiscovery{ID: "router", ServiceName: "router", ModelsPath: "v1/models"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := ResolveRuntime(&File{Borg: BorgConfig{K8SServiceDiscover: []ServiceDiscovery{tt.service}}})
+			if err == nil {
+				t.Fatal("expected validation error")
+			}
+		})
+	}
+}
+
+func TestDiscoverySourceIDsMustBeUnique(t *testing.T) {
+	_, err := ResolveRuntime(&File{Borg: BorgConfig{
+		K8SDiscover: []DiscoverySelector{{ID: "router"}},
+		K8SServiceDiscover: []ServiceDiscovery{{
+			ID:          "router",
+			ServiceName: "router",
+		}},
+	}})
+	if err == nil {
+		t.Fatal("expected duplicate source ID error")
+	}
+}
+
+func TestDiscoverySourceIDCannotReplaceStaticConfiguration(t *testing.T) {
+	_, err := ResolveRuntime(&File{Borg: BorgConfig{
+		K8SDiscover: []DiscoverySelector{{ID: discovery.StaticSourceID}},
+	}})
+	if err == nil {
+		t.Fatal("expected reserved static source ID error")
 	}
 }
 
@@ -234,6 +412,10 @@ func assertInstanceKey(t *testing.T, instances []ResolvedInstance, endpoint stri
 		}
 	}
 	t.Fatalf("missing endpoint %s", endpoint)
+}
+
+func int64Pointer(value int64) *int64 {
+	return &value
 }
 
 func writeFile(t *testing.T, path string, content string) {

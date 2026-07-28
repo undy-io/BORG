@@ -7,17 +7,21 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/undy-io/BORG/internal/discovery"
 )
 
 const (
-	DefaultConfigPath                = "config.yaml"
-	DefaultHost                      = "0.0.0.0"
-	DefaultPort                      = 8000
-	DefaultKeyValue                  = "EMPTY"
-	DefaultAuthPrefix                = "PROXY:"
-	DefaultMaxRequestBodyBytes int64 = 64 * 1024 * 1024
+	DefaultConfigPath                  = "config.yaml"
+	DefaultHost                        = "0.0.0.0"
+	DefaultPort                        = 8000
+	DefaultKeyValue                    = "EMPTY"
+	DefaultAuthPrefix                  = "PROXY:"
+	DefaultMaxRequestBodyBytes   int64 = 64 * 1024 * 1024
+	DefaultResponseHeaderTimeout       = 300
 
 	ProxyConfigEnv   = "PROXY_CONFIG"
 	PortEnv          = "PORT"
@@ -37,7 +41,9 @@ type BorgConfig struct {
 	Instances           []Instance          `json:"instances" yaml:"instances"`
 	UpdateInterval      int                 `json:"update_interval" yaml:"update_interval"`
 	K8SDiscover         []DiscoverySelector `json:"k8s_discover" yaml:"k8s_discover"`
+	K8SServiceDiscover  []ServiceDiscovery  `json:"k8s_service_discover" yaml:"k8s_service_discover"`
 	BackendHealth       BackendHealthConfig `json:"backend_health" yaml:"backend_health"`
+	Upstream            UpstreamConfig      `json:"upstream" yaml:"upstream"`
 	MaxRequestBodyBytes *int64              `json:"max_request_body_bytes" yaml:"max_request_body_bytes"`
 }
 
@@ -49,9 +55,27 @@ type Instance struct {
 }
 
 type DiscoverySelector struct {
+	ID        string `json:"id" yaml:"id"`
 	Namespace string `json:"namespace" yaml:"namespace"`
 	Selector  string `json:"selector" yaml:"selector"`
 	ModelKey  string `json:"modelkey" yaml:"modelkey"`
+}
+
+type ServiceDiscovery struct {
+	ID          string   `json:"id" yaml:"id"`
+	Namespace   string   `json:"namespace" yaml:"namespace"`
+	ServiceName string   `json:"service_name" yaml:"service_name"`
+	Selector    string   `json:"selector" yaml:"selector"`
+	Port        int32    `json:"port" yaml:"port"`
+	PortName    string   `json:"port_name" yaml:"port_name"`
+	Protocol    string   `json:"protocol" yaml:"protocol"`
+	APIBase     string   `json:"api_base" yaml:"api_base"`
+	Models      []string `json:"models" yaml:"models"`
+	ModelKey    string   `json:"modelkey" yaml:"modelkey"`
+	Automodel   *bool    `json:"automodel" yaml:"automodel"`
+	ModelsPath  string   `json:"models_path" yaml:"models_path"`
+	APIKey      string   `json:"apikey" yaml:"apikey"`
+	APIKeyEnv   string   `json:"apikeyEnv" yaml:"apikeyEnv"`
 }
 
 type BackendHealthConfig struct {
@@ -61,13 +85,19 @@ type BackendHealthConfig struct {
 	EjectOn500       bool  `json:"eject_on_500" yaml:"eject_on_500"`
 }
 
+type UpstreamConfig struct {
+	ResponseHeaderTimeoutSeconds *int `json:"response_header_timeout_seconds" yaml:"response_header_timeout_seconds"`
+}
+
 type Runtime struct {
 	AuthKey             string
 	AuthPrefix          string
 	Instances           []ResolvedInstance
 	UpdateInterval      int
 	K8SDiscover         []DiscoverySelector
+	K8SServiceDiscover  []ResolvedServiceDiscovery
 	BackendHealth       ResolvedBackendHealth
+	Upstream            ResolvedUpstream
 	MaxRequestBodyBytes int64
 }
 
@@ -77,11 +107,31 @@ type ResolvedInstance struct {
 	Models   []string
 }
 
+type ResolvedServiceDiscovery struct {
+	ID          string
+	Namespace   string
+	ServiceName string
+	Selector    string
+	Port        int32
+	PortName    string
+	Protocol    string
+	APIBase     string
+	Models      []string
+	ModelKey    string
+	Automodel   bool
+	ModelsPath  string
+	APIKey      string
+}
+
 type ResolvedBackendHealth struct {
 	Enabled          bool
 	FailureThreshold int
 	CooldownSeconds  int
 	EjectOn500       bool
+}
+
+type ResolvedUpstream struct {
+	ResponseHeaderTimeoutSeconds int
 }
 
 func ResolveConfigPath(flagValue string) string {
@@ -157,13 +207,23 @@ func ResolveRuntime(file *File) (*Runtime, error) {
 	}
 
 	borg := file.Borg
+	upstream, err := resolveUpstream(borg.Upstream)
+	if err != nil {
+		return nil, err
+	}
+	maxRequestBodyBytes, err := resolveMaxRequestBodyBytes(borg.MaxRequestBodyBytes)
+	if err != nil {
+		return nil, err
+	}
+
 	runtime := &Runtime{
 		AuthKey:             resolveAuthKey(borg.AuthKey, borg.AuthKeyFromEnv),
 		AuthPrefix:          resolveAuthPrefix(borg.AuthPrefix),
 		UpdateInterval:      borg.UpdateInterval,
 		K8SDiscover:         append([]DiscoverySelector(nil), borg.K8SDiscover...),
 		BackendHealth:       resolveBackendHealth(borg.BackendHealth),
-		MaxRequestBodyBytes: resolveMaxRequestBodyBytes(borg.MaxRequestBodyBytes),
+		Upstream:            upstream,
+		MaxRequestBodyBytes: maxRequestBodyBytes,
 	}
 
 	apiKeyDefault := os.Getenv(APIKeyEnv)
@@ -186,7 +246,116 @@ func ResolveRuntime(file *File) (*Runtime, error) {
 		})
 	}
 
+	for idx := range runtime.K8SDiscover {
+		selector := &runtime.K8SDiscover[idx]
+		if selector.ID == "" {
+			selector.ID = derivedPodSourceID(*selector)
+		}
+	}
+
+	for _, service := range borg.K8SServiceDiscover {
+		resolved, err := resolveServiceDiscovery(service, apiKeyDefault)
+		if err != nil {
+			return nil, err
+		}
+		runtime.K8SServiceDiscover = append(runtime.K8SServiceDiscover, resolved)
+	}
+	if err := validateDiscoverySourceIDs(runtime); err != nil {
+		return nil, err
+	}
+
 	return runtime, nil
+}
+
+func resolveUpstream(configValue UpstreamConfig) (ResolvedUpstream, error) {
+	timeout := DefaultResponseHeaderTimeout
+	if configValue.ResponseHeaderTimeoutSeconds != nil {
+		timeout = *configValue.ResponseHeaderTimeoutSeconds
+	}
+	if timeout < 0 {
+		return ResolvedUpstream{}, errors.New("upstream response_header_timeout_seconds cannot be negative")
+	}
+	return ResolvedUpstream{ResponseHeaderTimeoutSeconds: timeout}, nil
+}
+
+func derivedPodSourceID(selector DiscoverySelector) string {
+	namespace := selector.Namespace
+	if namespace == "" {
+		namespace = "default"
+	}
+	return fmt.Sprintf("pods:%s:%s:%s", namespace, selector.Selector, selector.ModelKey)
+}
+
+func resolveServiceDiscovery(service ServiceDiscovery, apiKeyDefault string) (ResolvedServiceDiscovery, error) {
+	if service.ID == "" {
+		return ResolvedServiceDiscovery{}, errors.New("k8s_service_discover entry id is required")
+	}
+	if (service.ServiceName == "") == (service.Selector == "") {
+		return ResolvedServiceDiscovery{}, fmt.Errorf("k8s_service_discover %q must set exactly one of service_name or selector", service.ID)
+	}
+	if service.Port < 0 || service.Port > 65535 {
+		return ResolvedServiceDiscovery{}, fmt.Errorf("k8s_service_discover %q port must be between 1 and 65535", service.ID)
+	}
+	if service.Port > 0 && service.PortName != "" {
+		return ResolvedServiceDiscovery{}, fmt.Errorf("k8s_service_discover %q cannot set both port and port_name", service.ID)
+	}
+	if service.Protocol != "" && service.Protocol != "http" && service.Protocol != "https" {
+		return ResolvedServiceDiscovery{}, fmt.Errorf("k8s_service_discover %q protocol must be http or https", service.ID)
+	}
+	if service.APIBase != "" && !strings.HasPrefix(service.APIBase, "/") {
+		return ResolvedServiceDiscovery{}, fmt.Errorf("k8s_service_discover %q api_base must start with /", service.ID)
+	}
+
+	automodel := true
+	if service.Automodel != nil {
+		automodel = *service.Automodel
+	}
+	modelsPath := service.ModelsPath
+	if modelsPath == "" {
+		modelsPath = "/v1/models"
+	}
+	if !strings.HasPrefix(modelsPath, "/") {
+		return ResolvedServiceDiscovery{}, fmt.Errorf("k8s_service_discover %q models_path must start with /", service.ID)
+	}
+
+	return ResolvedServiceDiscovery{
+		ID:          service.ID,
+		Namespace:   service.Namespace,
+		ServiceName: service.ServiceName,
+		Selector:    service.Selector,
+		Port:        service.Port,
+		PortName:    service.PortName,
+		Protocol:    service.Protocol,
+		APIBase:     service.APIBase,
+		Models:      append([]string(nil), service.Models...),
+		ModelKey:    service.ModelKey,
+		Automodel:   automodel,
+		ModelsPath:  modelsPath,
+		APIKey:      resolveAPIKey(service.APIKey, service.APIKeyEnv, apiKeyDefault),
+	}, nil
+}
+
+func validateDiscoverySourceIDs(runtime *Runtime) error {
+	seen := make(map[string]struct{}, len(runtime.K8SDiscover)+len(runtime.K8SServiceDiscover))
+	for _, selector := range runtime.K8SDiscover {
+		if selector.ID == discovery.StaticSourceID {
+			return fmt.Errorf("discovery source id %q is reserved", selector.ID)
+		}
+		if _, ok := seen[selector.ID]; ok {
+			return fmt.Errorf("duplicate discovery source id %q", selector.ID)
+		}
+		seen[selector.ID] = struct{}{}
+	}
+	for _, service := range runtime.K8SServiceDiscover {
+		if service.ID == discovery.StaticSourceID {
+			return fmt.Errorf("discovery source id %q is reserved", service.ID)
+		}
+		if _, ok := seen[service.ID]; ok {
+			return fmt.Errorf("duplicate discovery source id %q", service.ID)
+		}
+		seen[service.ID] = struct{}{}
+	}
+	return nil
 }
 
 func resolveAuthKey(configValue string, envName string) string {
@@ -238,24 +407,28 @@ func resolveBackendHealth(configValue BackendHealthConfig) ResolvedBackendHealth
 	}
 }
 
-func resolveMaxRequestBodyBytes(configValue *int64) int64 {
+func resolveMaxRequestBodyBytes(configValue *int64) (int64, error) {
 	if configValue == nil {
-		return DefaultMaxRequestBodyBytes
+		return DefaultMaxRequestBodyBytes, nil
 	}
 	if *configValue < 0 {
-		return DefaultMaxRequestBodyBytes
+		return 0, errors.New("max_request_body_bytes cannot be negative")
 	}
-	return *configValue
+	return *configValue, nil
 }
 
 func resolveInstanceAPIKey(inst Instance, defaultValue string) string {
-	if inst.APIKeyEnv != "" {
-		if value := os.Getenv(inst.APIKeyEnv); value != "" {
+	return resolveAPIKey(inst.APIKey, inst.APIKeyEnv, defaultValue)
+}
+
+func resolveAPIKey(inline string, envName string, defaultValue string) string {
+	if envName != "" {
+		if value := os.Getenv(envName); value != "" {
 			return value
 		}
 	}
-	if inst.APIKey != "" {
-		return inst.APIKey
+	if inline != "" {
+		return inline
 	}
 	return defaultValue
 }

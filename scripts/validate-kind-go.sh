@@ -343,6 +343,13 @@ assert_contains() {
   fi
 }
 
+active_borg_replica_set() {
+  kubectl --context "$KUBE_CONTEXT" -n "$BORG_NAMESPACE" get rs \
+    -l 'app=borg,release=borg' \
+    -o jsonpath='{range .items[*]}{.metadata.name}{" "}{.spec.replicas}{"\n"}{end}' |
+    awk '$2 > 0 { print $1; exit }'
+}
+
 validate_http() {
   local base_url="http://127.0.0.1:${LOCAL_PORT}"
   local token
@@ -395,6 +402,30 @@ validate_http() {
   assert_contains "$stream_response" 'data: [DONE]' "stream should include DONE sentinel"
 }
 
+validate_config_rollout() {
+  log "Validating config-only Helm upgrade rollout"
+  local before_checksum before_replica_set after_checksum after_replica_set
+  before_checksum="$(kubectl --context "$KUBE_CONTEXT" -n "$BORG_NAMESPACE" get "deploy/${BORG_DEPLOYMENT}" -o jsonpath='{.spec.template.metadata.annotations.checksum\.borg\.undy\.io/config}')"
+  before_replica_set="$(active_borg_replica_set)"
+
+  helm --kube-context "$KUBE_CONTEXT" upgrade "$BORG_RELEASE" \
+    "${REPO_ROOT}/charts/borg" \
+    -n "$BORG_NAMESPACE" \
+    -f "${BUILD_DIR}/borg-values.yaml" \
+    --set config.upstream.response_header_timeout_seconds=301
+
+  kubectl --context "$KUBE_CONTEXT" -n "$BORG_NAMESPACE" rollout status \
+    "deploy/${BORG_DEPLOYMENT}" \
+    --timeout=120s
+
+  after_checksum="$(kubectl --context "$KUBE_CONTEXT" -n "$BORG_NAMESPACE" get "deploy/${BORG_DEPLOYMENT}" -o jsonpath='{.spec.template.metadata.annotations.checksum\.borg\.undy\.io/config}')"
+  after_replica_set="$(active_borg_replica_set)"
+
+  [[ -n "$before_checksum" && "$before_checksum" != "$after_checksum" ]] || die "config-only upgrade did not change the config checksum"
+  [[ -n "$before_replica_set" && "$before_replica_set" != "$after_replica_set" ]] || die "config-only upgrade did not create a new ReplicaSet"
+  kubectl --context "$KUBE_CONTEXT" -n "$BORG_NAMESPACE" get "rs/${after_replica_set}" >/dev/null || die "new ReplicaSet was not found"
+}
+
 ensure_cluster
 prepare_kubeconfig_copy
 wait_for_cluster
@@ -404,5 +435,6 @@ deploy_dummy
 deploy_borg
 start_port_forward
 validate_http
+validate_config_rollout
 
 log "KinD Go validation passed"

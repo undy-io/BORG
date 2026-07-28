@@ -53,9 +53,9 @@ borg:
 	called := false
 
 	borgApp, err := NewWithOptions(path, Options{
-		DiscoveryFactory: func([]config.DiscoverySelector) (discovery.Discoverer, error) {
+		DiscoveryFactory: func(*config.Runtime) ([]discovery.Source, error) {
 			called = true
-			return &appTestDiscoverer{}, nil
+			return []discovery.Source{{ID: "pods:test", Discoverer: &appTestDiscoverer{}}}, nil
 		},
 	})
 	if err != nil {
@@ -77,9 +77,9 @@ borg:
 	called := false
 
 	borgApp, err := NewWithOptions(path, Options{
-		DiscoveryFactory: func([]config.DiscoverySelector) (discovery.Discoverer, error) {
+		DiscoveryFactory: func(*config.Runtime) ([]discovery.Source, error) {
 			called = true
-			return &appTestDiscoverer{}, nil
+			return []discovery.Source{{ID: "pods:test", Discoverer: &appTestDiscoverer{}}}, nil
 		},
 	})
 	if err != nil {
@@ -89,6 +89,34 @@ borg:
 
 	if called {
 		t.Fatal("expected discovery factory not to be called")
+	}
+}
+
+func TestNewStartsServiceOnlyDiscovery(t *testing.T) {
+	path := writeAppConfig(t, `
+borg:
+  auth_key: "EMPTY"
+  update_interval: 3600
+  k8s_service_discover:
+    - id: llmd-router
+      namespace: models
+      selector: "app=vllm"
+`)
+	var got []config.ResolvedServiceDiscovery
+
+	borgApp, err := NewWithOptions(path, Options{
+		DiscoveryFactory: func(runtime *config.Runtime) ([]discovery.Source, error) {
+			got = append([]config.ResolvedServiceDiscovery(nil), runtime.K8SServiceDiscover...)
+			return []discovery.Source{{ID: "llmd-router", Discoverer: &appTestDiscoverer{}}}, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer borgApp.Close()
+
+	if len(got) != 1 || got[0].ID != "llmd-router" {
+		t.Fatalf("expected one service selector, got %#v", got)
 	}
 }
 
@@ -102,7 +130,7 @@ borg:
 `)
 
 	borgApp, err := NewWithOptions(path, Options{
-		DiscoveryFactory: func([]config.DiscoverySelector) (discovery.Discoverer, error) {
+		DiscoveryFactory: func(*config.Runtime) ([]discovery.Source, error) {
 			return nil, errors.New("no kube config")
 		},
 	})
@@ -128,12 +156,15 @@ borg:
 `)
 
 	borgApp, err := NewWithOptions(path, Options{
-		DiscoveryFactory: func([]config.DiscoverySelector) (discovery.Discoverer, error) {
-			return &appTestDiscoverer{
-				endpoints: []discovery.Endpoint{
-					{URL: "http://discovered", Models: []string{"dynamic-model"}},
+		DiscoveryFactory: func(runtime *config.Runtime) ([]discovery.Source, error) {
+			return []discovery.Source{{
+				ID: runtime.K8SDiscover[0].ID,
+				Discoverer: &appTestDiscoverer{
+					endpoints: []discovery.Endpoint{
+						{URL: "http://discovered", Models: []string{"dynamic-model"}},
+					},
 				},
-			}, nil
+			}}, nil
 		},
 	})
 	if err != nil {
@@ -155,6 +186,76 @@ borg:
 	}
 }
 
+func TestDiscoverySourcesRefreshIndependently(t *testing.T) {
+	path := writeAppConfig(t, `
+borg:
+  auth_key: "EMPTY"
+  update_interval: 1
+  k8s_discover:
+    - id: broken-pods
+      selector: "app=broken"
+    - id: working-pods
+      selector: "app=working"
+`)
+	blocked := &appTestDiscoverer{
+		block:   true,
+		started: make(chan struct{}),
+		stopped: make(chan struct{}),
+	}
+	working := &appRefreshingDiscoverer{}
+
+	borgApp, err := NewWithOptions(path, Options{
+		DiscoveryFactory: func(*config.Runtime) ([]discovery.Source, error) {
+			return []discovery.Source{
+				{ID: "broken-pods", Discoverer: blocked},
+				{ID: "working-pods", Discoverer: working},
+			}, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer borgApp.Close()
+
+	select {
+	case <-blocked.started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("blocked discovery source did not start")
+	}
+
+	waitForModel := func(model string, deadline time.Time) {
+		t.Helper()
+		for {
+			if _, ok := borgApp.Proxy.PickEndpoint(model); ok {
+				return
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("a blocked source prevented model %q from being registered", model)
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+	waitForModel("working-model", time.Now().Add(2*time.Second))
+	waitForModel("refreshed-model", time.Now().Add(3*time.Second))
+}
+
+type appRefreshingDiscoverer struct {
+	mu    sync.Mutex
+	calls int
+}
+
+func (d *appRefreshingDiscoverer) Discover(context.Context) ([]discovery.Endpoint, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	d.calls++
+	model := "working-model"
+	if d.calls > 1 {
+		model = "refreshed-model"
+	}
+	return []discovery.Endpoint{{URL: "http://working", Models: []string{model}}}, nil
+}
+
 func TestCloseStopsDiscovery(t *testing.T) {
 	path := writeAppConfig(t, `
 borg:
@@ -170,8 +271,8 @@ borg:
 	}
 
 	borgApp, err := NewWithOptions(path, Options{
-		DiscoveryFactory: func([]config.DiscoverySelector) (discovery.Discoverer, error) {
-			return discoverer, nil
+		DiscoveryFactory: func(runtime *config.Runtime) ([]discovery.Source, error) {
+			return []discovery.Source{{ID: runtime.K8SDiscover[0].ID, Discoverer: discoverer}}, nil
 		},
 	})
 	if err != nil {
