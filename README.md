@@ -9,18 +9,22 @@
 
 ---
 
-## Migration status
+## Project status
 
-BORG now defaults to the Go runtime. The retired Python implementation has been removed from the active source tree.
+BORG `v0.2.0` is the supported Go runtime. The Python-to-Go migration is
+complete, and the retired Python implementation and tooling have been removed
+from the active source tree.
 
-- Milestone 1 froze the Python contract in `docs/migration/`.
-- Milestone 2 added the Go core proxy, Kubernetes discovery, and Go `borg-genkey`.
-- The cutover pass switched the root Docker image, Helm chart default image path, and CI/release validation to Go.
-- The dedicated Python CI workflow, Python runtime, legacy `genkey.py`, and Python package build path have been removed.
-- The fake Kubernetes API smoke harness for Go discovery is implemented in `tests/k8s_smoke` and documented in `docs/migration/go-k8s-smoke-test-harness.md`.
-- The host/raw WSL KinD validation harness is implemented in `scripts/validate-kind-go.sh` and documented in `docs/migration/kind-go-validation-harness.md`.
-- Docker-in-Docker KinD inside the devcontainer is blocked in the current rootless/containerized WSL environment by non-writable cpuset cgroups; run real KinD validation from raw WSL/host for now.
-- The planned Go layout is documented in `docs/migration/go-project-layout.md`.
+- The root container image, Helm chart, CI, and release workflows target Go.
+- Kubernetes discovery supports eligible Pods and stable Service front doors.
+- Go CI enforces package and fake-Kubernetes tests, vet, pinned lint, and command
+  builds. Helm CI enforces strict chart validation.
+- The local quality baseline also includes a completed race-enabled test run.
+- The host/raw WSL KinD acceptance path has passed discovery, auth, forwarding,
+  SSE streaming, and config-only rollout validation.
+- Docker-in-Docker KinD remains unavailable in this devcontainer because of its
+  nested cgroup constraints; real-cluster validation runs from raw WSL/host.
+- Current implementation details are documented in `docs/architecture.md`.
 
 The production container exposes the Go service as `/usr/local/bin/borg`. During local smoke testing, build it as `bin/borg-go`.
 
@@ -302,8 +306,8 @@ go build -o bin/borg-genkey ./cmd/borg-genkey
 bin/borg-genkey <username> --namespace <namespace> --release <release>
 ```
 
-The utility discovers the chart's ConfigMap and effective auth Secret name. Use
-`--secret-name` only when the Secret is managed outside that chart metadata.
+The utility discovers the chart's ConfigMap defaults and effective auth Secret
+name. Use `--secret-name` to override the Secret name recorded in that ConfigMap.
 The selected Secret field must contain printable padded or unpadded base64url
 text that decodes to a 32-byte AES-256 key.
 
@@ -360,7 +364,8 @@ The harness uses this pinned Kubernetes node image by default because this WSL r
 kindest/node:v1.34.3@sha256:08497ee19eace7b4b5348db5c6a1591d7752b164530a36f855cb0f2bdcbadd48
 ```
 
-See `docs/migration/kind-go-validation-harness.md` for prerequisites, cleanup flags, and failure diagnostics.
+See `docs/testing/kind-validation.md` for prerequisites, cleanup flags, and
+failure diagnostics.
 
 For manual KinD toolchain checks:
 
@@ -382,19 +387,25 @@ The `dummy-openai/` Go app remains as a lightweight test backend for local and K
 
 ---
 
-## Migration docs
+## Documentation
+
+### Active documentation
 
 | Document | Purpose |
 | -------- | ------- |
-| `ROADMAP.md` | High-level migration milestones |
-| `MILESTONE.md` | Active milestone tasks and validation |
-| `SESSION_RECOVERY.md` | Durable handoff state if chat history is lost |
+| `docs/architecture.md` | Current Go runtime and deployment architecture |
+| `docs/testing/fake-kubernetes-smoke.md` | Local process-level Pod and Service discovery validation |
+| `docs/testing/kind-validation.md` | Real KinD deployment and rollout validation |
+
+### Migration history
+
+| Document | Purpose |
+| -------- | ------- |
+| `docs/migration/go-migration-roadmap.md` | Completed Python-to-Go migration roadmap |
+| `docs/migration/milestone-6-finalization.md` | Completed cleanup milestone and acceptance evidence |
 | `docs/migration/python-runtime-contract.md` | Historical Python CLI, config, env, and auth contract |
 | `docs/migration/python-http-contract.md` | Historical Python HTTP/proxy behavior contract |
 | `docs/migration/python-ops-contract.md` | Historical Python discovery, Helm, and runtime ops contract |
-| `docs/migration/go-project-layout.md` | Go project layout |
-| `docs/migration/go-k8s-smoke-test-harness.md` | Local fake Kubernetes API smoke harness for Go discovery |
-| `docs/migration/kind-go-validation-harness.md` | Real KinD deployment validation for the Go runtime |
 
 ---
 

@@ -1,7 +1,8 @@
 # KinD Go Validation Harness
 
 ## Purpose
-Validate the Go BORG runtime against a real local Kubernetes cluster after Docker and Helm defaults switch to Go.
+Validate the current Go BORG source tree and Helm deployment contract against a
+real local Kubernetes cluster by building local images from the checkout.
 
 The harness exercises the path that unit tests and fake API smoke tests cannot fully prove:
 - building the Go runtime
@@ -117,14 +118,24 @@ go build ./cmd/borg-genkey
 go test ./tests/k8s_smoke
 ```
 
-The fake Kubernetes smoke suite proves Go discovery behavior without Docker or a real cluster.
+The fake Kubernetes smoke suite in `docs/testing/fake-kubernetes-smoke.md`
+proves Go discovery behavior without Docker or a real cluster.
 The KinD harness proves that the Go runtime, Helm chart, Kubernetes discovery, auth utility, and container packaging work together in a real local cluster.
 
 ## Current Validation State
-The full create/delete path has passed from raw WSL with the Go dummy backend:
+The full `v0.2.0` source-tree create/delete acceptance path passed from raw WSL
+on July 28, 2026, with the Go dummy backend:
 
 ```bash
 scripts/validate-kind-go.sh --create-cluster --delete-cluster
 ```
 
-That run completed cluster creation, image build/load, Helm deployment, root/model checks, missing-auth rejection, authenticated POST forwarding, SSE streaming, and cluster deletion. The config-only rollout assertion was added after that recorded run and still requires host/raw WSL execution.
+That run completed cluster creation, image build/load, Helm deployment,
+root/model checks, missing-auth rejection, authenticated POST forwarding, SSE
+streaming, a config-only Helm upgrade, checksum verification, new ReplicaSet
+verification, and cluster deletion.
+
+The harness built its runtime images and rendered the chart from the local
+checkout; it did not pull the published GHCR image or packaged chart. Publication
+of those release artifacts is recorded separately by the green Docker and Helm
+release workflows.

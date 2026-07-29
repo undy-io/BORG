@@ -210,4 +210,5 @@ For Milestone 1, the Go rewrite should treat the following as the intended ops c
 - RBAC continues to allow pod discovery across configured namespaces
 
 ## Go Layout Link
-The planned Go package boundaries for app wiring, config, proxying, and Kubernetes discovery are documented in `docs/migration/go-project-layout.md`.
+The current Go package boundaries for app wiring, config, proxying, and
+Kubernetes discovery are documented in `docs/architecture.md`.

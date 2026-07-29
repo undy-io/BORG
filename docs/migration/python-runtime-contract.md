@@ -151,7 +151,7 @@ Migration implication:
 - `genkey.py` docstring still describes an older config-file-based flow, while the current CLI is Kubernetes-based.
 
 ## Go Layout Link
-The target side-by-side Go project shape is documented in `docs/migration/go-project-layout.md`.
+The current Go architecture is documented in `docs/architecture.md`.
 
 ## Open Questions For Checkpoint 1
 - Should `auth_key_from_env` become a real runtime key, or remain tooling/chart-only?

@@ -229,4 +229,5 @@ The first Go proxy intentionally tightens a few header behaviors while preservin
 The local smoke/parity harness should treat these as explicit accepted deltas rather than generic parity failures.
 
 ## Go Layout Link
-The HTTP route and proxy responsibilities for the Go implementation are mapped in `docs/migration/go-project-layout.md`.
+The current Go HTTP and proxy architecture is documented in
+`docs/architecture.md`.
