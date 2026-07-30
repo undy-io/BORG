@@ -393,6 +393,7 @@ The `dummy-openai/` Go app remains as a lightweight test backend for local and K
 
 | Document | Purpose |
 | -------- | ------- |
+| `MILESTONE.md` | Active request-event logging and Kafka export milestone |
 | `docs/architecture.md` | Current Go runtime and deployment architecture |
 | `docs/testing/fake-kubernetes-smoke.md` | Local process-level Pod and Service discovery validation |
 | `docs/testing/kind-validation.md` | Real KinD deployment and rollout validation |
