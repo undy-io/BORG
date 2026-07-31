@@ -37,12 +37,34 @@ cleanup() {
 }
 trap cleanup EXIT
 
-for command in docker go curl jq openssl keytool base64 cmp; do
+for command in docker go curl jq openssl base64 cmp; do
   command -v "$command" >/dev/null || {
     echo "Required command is missing: $command" >&2
     exit 1
   }
 done
+
+wait_for_broker() {
+	local timeout_seconds="$1"
+	local deadline=$((SECONDS + timeout_seconds))
+
+	while (( SECONDS < deadline )); do
+		if [[ "$(docker inspect --format '{{.State.Running}}' "$container" 2>/dev/null || true)" != "true" ]]; then
+			echo 'Kafka broker exited during startup:' >&2
+			docker logs "$container" >&2 || true
+			return 1
+		fi
+		if docker exec "$container" /opt/kafka/bin/kafka-topics.sh \
+			--bootstrap-server localhost:9092 --list >/dev/null 2>&1; then
+			return 0
+		fi
+		sleep 1
+	done
+
+	echo "Kafka broker did not become ready within ${timeout_seconds}s:" >&2
+	docker logs "$container" >&2 || true
+	return 1
+}
 
 consume_topic_snapshot() {
   local records_file="$1"
@@ -156,35 +178,41 @@ openssl pkcs12 -export \
   -name kafka \
   -passout pass:changeit \
   -out "$work_dir/tls/server.p12" >/dev/null 2>&1
-keytool -importcert -noprompt \
-  -alias borg-test-ca \
-  -file "$work_dir/tls/ca.crt" \
-  -keystore "$work_dir/tls/truststore.p12" \
-  -storetype PKCS12 \
-  -storepass changeit >/dev/null 2>&1
-chmod 0644 "$work_dir/tls/ca.crt" "$work_dir/tls/server.p12" "$work_dir/tls/truststore.p12"
+printf 'changeit\n' > "$work_dir/tls/keystore.creds"
+printf 'changeit\n' > "$work_dir/tls/key.creds"
+cat > "$work_dir/tls/kafka_server_jaas.conf" <<'EOF'
+KafkaServer {
+  org.apache.kafka.common.security.scram.ScramLoginModule required
+  username="borg"
+  password="borg-secret";
+};
+EOF
+chmod 0644 \
+	"$work_dir/tls/ca.crt" \
+	"$work_dir/tls/server.p12" \
+	"$work_dir/tls/keystore.creds" \
+	"$work_dir/tls/key.creds" \
+	"$work_dir/tls/kafka_server_jaas.conf"
 
 echo '==> Starting pinned Kafka broker with TLS and SCRAM-SHA-256'
 docker run -d --name "$container" --hostname kafka \
   -p "127.0.0.1:${kafka_port}:9094" \
   -v "$work_dir/tls:/etc/kafka/secrets:ro" \
+  -e CLUSTER_ID='4L6g3nShT-eMCtK--X86sw' \
   -e KAFKA_NODE_ID=1 \
   -e KAFKA_PROCESS_ROLES=broker,controller \
-  -e KAFKA_LISTENERS='INTERNAL://:9092,CONTROLLER://:9093,EXTERNAL://:9094' \
-  -e "KAFKA_ADVERTISED_LISTENERS=INTERNAL://kafka:9092,EXTERNAL://localhost:${kafka_port}" \
-  -e KAFKA_LISTENER_SECURITY_PROTOCOL_MAP='INTERNAL:PLAINTEXT,CONTROLLER:PLAINTEXT,EXTERNAL:SASL_SSL' \
+  -e KAFKA_LISTENERS='INTERNAL://:9092,CONTROLLER://:9093,SASL_SSL://:9094' \
+  -e "KAFKA_ADVERTISED_LISTENERS=INTERNAL://kafka:9092,SASL_SSL://localhost:${kafka_port}" \
+  -e KAFKA_LISTENER_SECURITY_PROTOCOL_MAP='INTERNAL:PLAINTEXT,CONTROLLER:PLAINTEXT,SASL_SSL:SASL_SSL' \
   -e KAFKA_INTER_BROKER_LISTENER_NAME=INTERNAL \
   -e KAFKA_CONTROLLER_LISTENER_NAMES=CONTROLLER \
   -e KAFKA_CONTROLLER_QUORUM_VOTERS='1@kafka:9093' \
   -e KAFKA_SASL_ENABLED_MECHANISMS='SCRAM-SHA-256' \
-  -e KAFKA_LISTENER_NAME_EXTERNAL_SASL_ENABLED_MECHANISMS='SCRAM-SHA-256' \
+  -e KAFKA_OPTS='-Djava.security.auth.login.config=/etc/kafka/secrets/kafka_server_jaas.conf' \
   -e KAFKA_SSL_KEYSTORE_TYPE=PKCS12 \
-  -e KAFKA_SSL_KEYSTORE_LOCATION=/etc/kafka/secrets/server.p12 \
-  -e KAFKA_SSL_KEYSTORE_PASSWORD=changeit \
-  -e KAFKA_SSL_KEY_PASSWORD=changeit \
-  -e KAFKA_SSL_TRUSTSTORE_TYPE=PKCS12 \
-  -e KAFKA_SSL_TRUSTSTORE_LOCATION=/etc/kafka/secrets/truststore.p12 \
-  -e KAFKA_SSL_TRUSTSTORE_PASSWORD=changeit \
+  -e KAFKA_SSL_KEYSTORE_FILENAME=server.p12 \
+  -e KAFKA_SSL_KEYSTORE_CREDENTIALS=keystore.creds \
+  -e KAFKA_SSL_KEY_CREDENTIALS=key.creds \
   -e KAFKA_SSL_CLIENT_AUTH=none \
   -e KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR=1 \
   -e KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR=1 \
@@ -192,15 +220,7 @@ docker run -d --name "$container" --hostname kafka \
   -e KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS=0 \
   "$kafka_image" >/dev/null
 
-for _ in $(seq 1 60); do
-  if docker exec "$container" /opt/kafka/bin/kafka-topics.sh \
-    --bootstrap-server localhost:9092 --list >/dev/null 2>&1; then
-    break
-  fi
-  sleep 1
-done
-docker exec "$container" /opt/kafka/bin/kafka-topics.sh \
-  --bootstrap-server localhost:9092 --list >/dev/null
+wait_for_broker 60
 
 docker exec "$container" /opt/kafka/bin/kafka-configs.sh \
   --bootstrap-server localhost:9092 \
@@ -364,15 +384,7 @@ curl -fsS -X POST "http://127.0.0.1:${borg_port}/v1/chat/completions" \
 
 echo '==> Restarting broker and confirming retained outage events are delivered'
 docker start "$container" >/dev/null
-for _ in $(seq 1 60); do
-	if docker exec "$container" /opt/kafka/bin/kafka-topics.sh \
-		--bootstrap-server localhost:9092 --list >/dev/null 2>&1; then
-		break
-	fi
-	sleep 1
-done
-docker exec "$container" /opt/kafka/bin/kafka-topics.sh \
-	--bootstrap-server localhost:9092 --list >/dev/null
+wait_for_broker 60
 
 wait_for_session_completions \
   "$work_dir/outage-records.txt" "$work_dir/outage-events.jsonl" 60 \
