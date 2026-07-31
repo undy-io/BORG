@@ -74,7 +74,7 @@ consume_topic_snapshot() {
     --topic borg.request-events.v1 \
     --from-beginning \
     --timeout-ms 2000 \
-    --property print.key=false > "$records_file" 2>/dev/null || true
+    --formatter-property print.key=false > "$records_file" 2>/dev/null || true
   cp "$records_file" "$events_file"
   if ! jq -e -s 'all(.[]; type == "object")' "$events_file" >/dev/null 2>&1; then
     echo 'Kafka consumer returned a malformed event snapshot' >&2
