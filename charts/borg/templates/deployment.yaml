@@ -6,6 +6,13 @@
 {{- $probeScheme := ternary "HTTPS" "HTTP" $serverTLS -}}
 {{- $backendEntries := concat (default (list) .Values.config.instances) (default (list) .Values.config.k8s_service_discover) -}}
 {{- $envNamePattern := "^[A-Za-z_][A-Za-z0-9_]*$" -}}
+{{- $requestLogging := .Values.config.request_logging -}}
+{{- $kafkaEnabled := eq $requestLogging.sink "kafka" -}}
+{{- $kafkaSASLEnabled := and $kafkaEnabled (ne $requestLogging.kafka.sasl.mechanism "none") -}}
+{{- $kafkaTLSFiles := or $requestLogging.kafka.tls.ca_file $requestLogging.kafka.tls.cert_file $requestLogging.kafka.tls.key_file -}}
+{{- if and $kafkaEnabled (lt (int .Values.terminationGracePeriodSeconds) (add 30 (int $requestLogging.shutdown_timeout_seconds))) -}}
+{{- fail (printf "terminationGracePeriodSeconds must be at least %d when Kafka request logging is enabled" (add 30 (int $requestLogging.shutdown_timeout_seconds))) -}}
+{{- end -}}
 {{- $authEnv := .Values.authKeySecret.key | required "authKeySecret.key must be set" -}}
 {{- if not (regexMatch $envNamePattern $authEnv) -}}
 {{- fail (printf "authKeySecret.key %q must be a portable environment variable name" $authEnv) -}}
@@ -14,12 +21,41 @@
 {{- fail (printf "authKeySecret.key %q is reserved by BORG" $authEnv) -}}
 {{- end -}}
 {{- $backendReserved := list "PORT" "PROXY_CONFIG" "AUTH_KEY" "BORG_AUTH_KEY" "TLS_CERT_FILE" "TLS_KEY_FILE" -}}
+{{- $kafkaUsernameEnv := $requestLogging.kafka.sasl.username_from_env -}}
+{{- $kafkaPasswordEnv := $requestLogging.kafka.sasl.password_from_env -}}
+{{- if $kafkaSASLEnabled -}}
+{{- if not .Values.requestLoggingSecrets.kafkaCredentials.existingSecret -}}
+{{- fail "requestLoggingSecrets.kafkaCredentials.existingSecret is required when Kafka SASL is enabled" -}}
+{{- end -}}
+{{- range $name := list $kafkaUsernameEnv $kafkaPasswordEnv -}}
+{{- if not (regexMatch $envNamePattern $name) -}}
+{{- fail (printf "Kafka SASL environment name %q must be a portable environment variable name" $name) -}}
+{{- end -}}
+{{- if or (has $name $backendReserved) (eq $name "API_KEY") (eq $name $authEnv) -}}
+{{- fail (printf "Kafka SASL environment name %q collides with a BORG environment variable" $name) -}}
+{{- end -}}
+{{- end -}}
+{{- if eq $kafkaUsernameEnv $kafkaPasswordEnv -}}
+{{- fail "Kafka SASL username and password environment names must be different" -}}
+{{- end -}}
+{{- end -}}
+{{- if and $kafkaEnabled $kafkaTLSFiles (not .Values.requestLoggingSecrets.kafkaTLS.existingSecret) -}}
+{{- fail "requestLoggingSecrets.kafkaTLS.existingSecret is required when Kafka TLS file paths are configured" -}}
+{{- end -}}
+{{- if and $kafkaEnabled $kafkaTLSFiles -}}
+{{- $mountPrefix := printf "%s/" (trimSuffix "/" .Values.requestLoggingSecrets.kafkaTLS.mountPath) -}}
+{{- range $path := list $requestLogging.kafka.tls.ca_file $requestLogging.kafka.tls.cert_file $requestLogging.kafka.tls.key_file -}}
+{{- if and $path (not (hasPrefix $mountPrefix $path)) -}}
+{{- fail (printf "Kafka TLS file path %q must be below requestLoggingSecrets.kafkaTLS.mountPath %q" $path .Values.requestLoggingSecrets.kafkaTLS.mountPath) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
 {{- range $backendEntries -}}
 {{- if .apikeyEnv -}}
 {{- if not (regexMatch $envNamePattern .apikeyEnv) -}}
 {{- fail (printf "apikeyEnv %q must be a portable environment variable name" .apikeyEnv) -}}
 {{- end -}}
-{{- if or (has .apikeyEnv $backendReserved) (eq .apikeyEnv $authEnv) -}}
+{{- if or (has .apikeyEnv $backendReserved) (eq .apikeyEnv $authEnv) (and $kafkaSASLEnabled (or (eq .apikeyEnv $kafkaUsernameEnv) (eq .apikeyEnv $kafkaPasswordEnv))) -}}
 {{- fail (printf "apikeyEnv %q collides with a BORG environment variable" .apikeyEnv) -}}
 {{- end -}}
 {{- end -}}
@@ -68,6 +104,7 @@ spec:
 {{ toYaml $podAnnotations | indent 8 }}
     spec:
       serviceAccountName: {{ include "borg.serviceAccountName" . }}
+      terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds }}
       {{- with .Values.podSecurityContext }}
       securityContext:
 {{ toYaml . | indent 8 }}
@@ -100,6 +137,18 @@ spec:
             - name: TLS_KEY_FILE
               value: {{ printf "%s/%s" .Values.server.tls.mountPath .Values.server.tls.privateKeyKey | quote }}
             {{- end }}
+            {{- if $kafkaSASLEnabled }}
+            - name: {{ $kafkaUsernameEnv | quote }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.requestLoggingSecrets.kafkaCredentials.existingSecret | quote }}
+                  key: {{ .Values.requestLoggingSecrets.kafkaCredentials.usernameKey | quote }}
+            - name: {{ $kafkaPasswordEnv | quote }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.requestLoggingSecrets.kafkaCredentials.existingSecret | quote }}
+                  key: {{ .Values.requestLoggingSecrets.kafkaCredentials.passwordKey | quote }}
+            {{- end }}
             {{- $seenAPIKeyEnvs := dict }}
             {{- range $backendEntries }}
             {{- if and .apikeyEnv (not (hasKey $seenAPIKeyEnvs .apikeyEnv)) }}
@@ -118,6 +167,11 @@ spec:
             {{- if $serverTLS }}
             - name: tls-volume
               mountPath: {{ .Values.server.tls.mountPath }}
+              readOnly: true
+            {{- end }}
+            {{- if and $kafkaEnabled $kafkaTLSFiles }}
+            - name: kafka-tls-volume
+              mountPath: {{ .Values.requestLoggingSecrets.kafkaTLS.mountPath | quote }}
               readOnly: true
             {{- end }}
           livenessProbe:
@@ -151,4 +205,9 @@ spec:
                 path: {{ .Values.server.tls.certKey }}
               - key: {{ .Values.server.tls.privateKeyKey }}
                 path: {{ .Values.server.tls.privateKeyKey }}
+        {{- end }}
+        {{- if and $kafkaEnabled $kafkaTLSFiles }}
+        - name: kafka-tls-volume
+          secret:
+            secretName: {{ .Values.requestLoggingSecrets.kafkaTLS.existingSecret | quote }}
         {{- end }}

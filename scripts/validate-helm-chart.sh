@@ -90,6 +90,138 @@ assert_contains "${work_dir}/borg-default.yaml" '^        \[\]$'
 assert_contains "${work_dir}/borg-default.yaml" '^      max_request_body_bytes: 67108864$'
 assert_contains "${work_dir}/borg-default.yaml" '^        response_header_timeout_seconds: 300$'
 assert_contains "${work_dir}/borg-default.yaml" '^      k8s_service_discover:$'
+assert_contains "${work_dir}/borg-default.yaml" '^      request_logging:$'
+assert_contains "${work_dir}/borg-default.yaml" '^        sink: noop$'
+assert_contains "${work_dir}/borg-default.yaml" '^          request_headers: false$'
+assert_contains "${work_dir}/borg-default.yaml" '^          response_headers: false$'
+assert_count "${work_dir}/borg-default.yaml" '^          excluded_(request|response)_headers: \[\]$' 2
+assert_contains "${work_dir}/borg-default.yaml" '^      terminationGracePeriodSeconds: 60$'
+assert_not_contains "${work_dir}/borg-default.yaml" '^            - name: "BORG_KAFKA_(USERNAME|PASSWORD)"$'
+assert_not_contains "${work_dir}/borg-default.yaml" 'kafka-tls-volume'
+
+render borg-kafka-plaintext \
+  --set config.request_logging.sink=kafka \
+  --set config.request_logging.kafka.brokers[0]=kafka:9092
+assert_contains "${work_dir}/borg-kafka-plaintext.yaml" '^        sink: kafka$'
+assert_contains "${work_dir}/borg-kafka-plaintext.yaml" '^          - kafka:9092$'
+assert_not_contains "${work_dir}/borg-kafka-plaintext.yaml" '^            - name: "BORG_KAFKA_(USERNAME|PASSWORD)"$'
+assert_not_contains "${work_dir}/borg-kafka-plaintext.yaml" 'kafka-tls-volume'
+
+render borg-kafka-header-capture \
+  --set config.request_logging.capture.request_headers=true \
+  --set config.request_logging.capture.response_headers=true \
+  --set config.request_logging.capture.excluded_request_headers[0]=Authorization \
+  --set config.request_logging.capture.excluded_response_headers[0]=Set-Cookie \
+  --set config.request_logging.session_headers[0].name=X-API-Key \
+  --set config.request_logging.session_headers[0].value_mode=raw \
+  --set config.request_logging.partition_header=Authorization \
+  --set-string 'config.request_logging.filters[0].headers.Authorization[0]=^Bearer'
+assert_contains "${work_dir}/borg-kafka-header-capture.yaml" '^          request_headers: true$'
+assert_contains "${work_dir}/borg-kafka-header-capture.yaml" '^          response_headers: true$'
+assert_contains "${work_dir}/borg-kafka-header-capture.yaml" '^          - Authorization$'
+assert_contains "${work_dir}/borg-kafka-header-capture.yaml" '^          - Set-Cookie$'
+assert_contains "${work_dir}/borg-kafka-header-capture.yaml" '^        - name: X-API-Key$'
+
+if helm template borg-invalid-header-exclusion "$chart_dir" \
+  --set-string 'config.request_logging.capture.excluded_request_headers[0]=bad header' \
+  > "${work_dir}/borg-invalid-header-exclusion.yaml" 2> "${work_dir}/borg-invalid-header-exclusion.err"; then
+  echo "Expected an invalid request header exclusion to fail schema validation" >&2
+  exit 1
+fi
+assert_contains "${work_dir}/borg-invalid-header-exclusion.err" 'excluded_request_headers'
+
+render borg-kafka-sasl \
+  --set config.request_logging.sink=kafka \
+  --set config.request_logging.kafka.brokers[0]=kafka:9092 \
+  --set config.request_logging.kafka.sasl.mechanism=scram-sha-512 \
+  --set requestLoggingSecrets.kafkaCredentials.existingSecret=kafka-credentials
+assert_contains "${work_dir}/borg-kafka-sasl.yaml" '^            - name: "BORG_KAFKA_USERNAME"$'
+assert_contains "${work_dir}/borg-kafka-sasl.yaml" '^                  name: "kafka-credentials"$'
+assert_contains "${work_dir}/borg-kafka-sasl.yaml" '^                  key: "username"$'
+assert_contains "${work_dir}/borg-kafka-sasl.yaml" '^                  key: "password"$'
+assert_not_contains "${work_dir}/borg-kafka-sasl.yaml" 'value:.*(user|password)'
+
+render borg-kafka-tls \
+  --set config.request_logging.sink=kafka \
+  --set config.request_logging.kafka.brokers[0]=kafka:9093 \
+  --set config.request_logging.kafka.tls.enabled=true \
+  --set config.request_logging.kafka.tls.ca_file=/app/kafka-tls/ca.crt \
+  --set config.request_logging.kafka.tls.cert_file=/app/kafka-tls/tls.crt \
+  --set config.request_logging.kafka.tls.key_file=/app/kafka-tls/tls.key \
+  --set requestLoggingSecrets.kafkaTLS.existingSecret=kafka-tls
+assert_contains "${work_dir}/borg-kafka-tls.yaml" '^            - name: kafka-tls-volume$'
+assert_contains "${work_dir}/borg-kafka-tls.yaml" '^              mountPath: "/app/kafka-tls"$'
+assert_contains "${work_dir}/borg-kafka-tls.yaml" '^            secretName: "kafka-tls"$'
+
+if helm template borg-kafka-missing-broker "$chart_dir" \
+  --set config.request_logging.sink=kafka \
+  > "${work_dir}/borg-kafka-missing-broker.yaml" 2> "${work_dir}/borg-kafka-missing-broker.err"; then
+  echo "Expected Kafka logging without brokers to fail schema validation" >&2
+  exit 1
+fi
+assert_contains "${work_dir}/borg-kafka-missing-broker.err" 'brokers'
+
+if helm template borg-kafka-missing-credentials "$chart_dir" \
+  --set config.request_logging.sink=kafka \
+  --set config.request_logging.kafka.brokers[0]=kafka:9092 \
+  --set config.request_logging.kafka.sasl.mechanism=plain \
+  > "${work_dir}/borg-kafka-missing-credentials.yaml" 2> "${work_dir}/borg-kafka-missing-credentials.err"; then
+  echo "Expected Kafka SASL without an existing Secret to fail" >&2
+  exit 1
+fi
+assert_contains "${work_dir}/borg-kafka-missing-credentials.err" 'kafkaCredentials.existingSecret'
+
+if helm template borg-kafka-missing-tls "$chart_dir" \
+  --set config.request_logging.sink=kafka \
+  --set config.request_logging.kafka.brokers[0]=kafka:9093 \
+  --set config.request_logging.kafka.tls.enabled=true \
+  --set config.request_logging.kafka.tls.ca_file=/app/kafka-tls/ca.crt \
+  > "${work_dir}/borg-kafka-missing-tls.yaml" 2> "${work_dir}/borg-kafka-missing-tls.err"; then
+  echo "Expected Kafka TLS files without an existing Secret to fail" >&2
+  exit 1
+fi
+assert_contains "${work_dir}/borg-kafka-missing-tls.err" 'kafkaTLS.existingSecret'
+
+if helm template borg-kafka-env-collision "$chart_dir" \
+  --set config.request_logging.sink=kafka \
+  --set config.request_logging.kafka.brokers[0]=kafka:9092 \
+  --set config.request_logging.kafka.sasl.mechanism=plain \
+  --set config.request_logging.kafka.sasl.username_from_env=AUTH_KEY \
+  --set requestLoggingSecrets.kafkaCredentials.existingSecret=kafka-credentials \
+  > "${work_dir}/borg-kafka-env-collision.yaml" 2> "${work_dir}/borg-kafka-env-collision.err"; then
+  echo "Expected Kafka environment collision to fail" >&2
+  exit 1
+fi
+assert_contains "${work_dir}/borg-kafka-env-collision.err" 'collides with a BORG environment variable'
+
+if helm template borg-kafka-api-key-collision "$chart_dir" \
+  --set config.request_logging.sink=kafka \
+  --set config.request_logging.kafka.brokers[0]=kafka:9092 \
+  --set config.request_logging.kafka.sasl.mechanism=plain \
+  --set config.request_logging.kafka.sasl.username_from_env=API_KEY \
+  --set requestLoggingSecrets.kafkaCredentials.existingSecret=kafka-credentials \
+  > "${work_dir}/borg-kafka-api-key-collision.yaml" 2> "${work_dir}/borg-kafka-api-key-collision.err"; then
+  echo "Expected Kafka API_KEY collision to fail" >&2
+  exit 1
+fi
+assert_contains "${work_dir}/borg-kafka-api-key-collision.err" 'collides with a BORG environment variable'
+
+if helm template borg-kafka-termination-budget "$chart_dir" \
+  --set config.request_logging.sink=kafka \
+  --set config.request_logging.kafka.brokers[0]=kafka:9092 \
+  --set config.request_logging.shutdown_timeout_seconds=31 \
+  --set terminationGracePeriodSeconds=60 \
+  > "${work_dir}/borg-kafka-termination-budget.yaml" 2> "${work_dir}/borg-kafka-termination-budget.err"; then
+  echo "Expected insufficient Kafka termination budget to fail" >&2
+  exit 1
+fi
+assert_contains "${work_dir}/borg-kafka-termination-budget.err" 'terminationGracePeriodSeconds must be at least 61'
+
+render borg-request-logging-checksum
+cp "${work_dir}/borg-request-logging-checksum.yaml" "${work_dir}/borg-request-logging-checksum-first.yaml"
+render borg-request-logging-checksum \
+	--set config.request_logging.capture.request_headers=true
+assert_annotation_changed "${work_dir}/borg-request-logging-checksum-first.yaml" "${work_dir}/borg-request-logging-checksum.yaml" 'checksum.borg.undy.io/config'
 
 if helm template borg-negative-request-limit "$chart_dir" \
   --set config.max_request_body_bytes=-1 \

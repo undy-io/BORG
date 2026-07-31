@@ -13,6 +13,50 @@ borg:
     upstream:
       # Time to wait after upload for final response headers; 0 means unlimited.
       response_header_timeout_seconds: 300
+    request_logging:
+      # noop preserves normal proxy behavior without event export.
+      sink: noop
+      queue_capacity: 100000
+      queue_capacity_bytes: 4294967296
+      shutdown_timeout_seconds: 10
+      capture:
+        request_body: true
+        response_body: true
+        # Header capture is privileged and may export credentials or personal data.
+        request_headers: true
+        response_headers: true
+        # These are operator-selected examples, not hard-coded BORG restrictions.
+        excluded_request_headers:
+          - Authorization
+          - Proxy-Authorization
+          - Cookie
+          - X-API-Key
+          - X-Amz-Security-Token
+        excluded_response_headers:
+          - Set-Cookie
+          - Proxy-Authenticate
+        max_request_body_bytes: 524288
+        max_response_body_bytes: 16777216
+      session_headers: []
+      # - name: X-Session-ID
+      #   value_mode: sha256
+      partition_header: ""
+      filters: []
+      # - models: ["^Qwen/"]
+      kafka:
+        brokers: []
+        topic: borg.request-events.v1
+        client_id: borg
+        tls:
+          enabled: false
+          server_name: ""
+          ca_file: ""
+          cert_file: ""
+          key_file: ""
+        sasl:
+          mechanism: none
+          username_from_env: BORG_KAFKA_USERNAME
+          password_from_env: BORG_KAFKA_PASSWORD
     instances:
       # - endpoint: "http://10.0.0.5:8000"
       #   apikey: "sk‑examplekey123"

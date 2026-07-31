@@ -13,12 +13,16 @@ import (
 	k8sdiscovery "github.com/undy-io/BORG/internal/discovery/k8s"
 	"github.com/undy-io/BORG/internal/httpapi"
 	"github.com/undy-io/BORG/internal/proxy"
+	"github.com/undy-io/BORG/internal/requestlog"
+	"github.com/undy-io/BORG/internal/requestlog/kafkasink"
 )
 
 type DiscoveryFactory func(*config.Runtime) ([]discovery.Source, error)
+type RequestLoggerFactory func(requestlog.Config) (*requestlog.Logger, func(context.Context) error, error)
 
 type Options struct {
-	DiscoveryFactory DiscoveryFactory
+	DiscoveryFactory     DiscoveryFactory
+	RequestLoggerFactory RequestLoggerFactory
 }
 
 type App struct {
@@ -27,9 +31,10 @@ type App struct {
 	Proxy   *proxy.Service
 	Handler http.Handler
 
-	cancel    context.CancelFunc
-	wg        sync.WaitGroup
-	closeOnce sync.Once
+	cancel             context.CancelFunc
+	wg                 sync.WaitGroup
+	closeOnce          sync.Once
+	closeRequestLogger func(context.Context) error
 }
 
 func New(configPath string) (*App, error) {
@@ -64,16 +69,47 @@ func NewWithOptions(configPath string, opts Options) (*App, error) {
 	if err := proxyService.ReplaceSource(proxy.StaticSourceID, staticEndpoints); err != nil {
 		return nil, err
 	}
+	requestLogger, closeRequestLogger, err := opts.requestLoggerFactory()(runtime.RequestLogging)
+	if err != nil {
+		return nil, err
+	}
 
 	borgApp := &App{
-		Config:  runtime,
-		Auth:    authenticator,
-		Proxy:   proxyService,
-		Handler: httpapi.New(authenticator, proxyService, httpapi.WithMaxRequestBodyBytes(runtime.MaxRequestBodyBytes)),
+		Config: runtime,
+		Auth:   authenticator,
+		Proxy:  proxyService,
+		Handler: httpapi.New(
+			authenticator,
+			proxyService,
+			httpapi.WithMaxRequestBodyBytes(runtime.MaxRequestBodyBytes),
+			httpapi.WithRequestLogger(requestLogger),
+		),
+		closeRequestLogger: closeRequestLogger,
 	}
 	borgApp.startDiscovery(runtime, opts.discoveryFactory())
 
 	return borgApp, nil
+}
+
+func (o Options) requestLoggerFactory() RequestLoggerFactory {
+	if o.RequestLoggerFactory != nil {
+		return o.RequestLoggerFactory
+	}
+	return func(loggingConfig requestlog.Config) (*requestlog.Logger, func(context.Context) error, error) {
+		if !loggingConfig.Enabled() {
+			return requestlog.NewLogger(loggingConfig, nil), nil, nil
+		}
+		sink, err := kafkasink.New(loggingConfig)
+		if err != nil {
+			return nil, nil, err
+		}
+		exporter, err := requestlog.NewExporter(loggingConfig.QueueCapacity, loggingConfig.QueueCapacityBytes, sink)
+		if err != nil {
+			sink.Close()
+			return nil, nil, err
+		}
+		return requestlog.NewLogger(loggingConfig, exporter), exporter.Close, nil
+	}
 }
 
 func (o Options) discoveryFactory() DiscoveryFactory {
@@ -153,5 +189,13 @@ func (a *App) Close() {
 			a.cancel()
 		}
 		a.wg.Wait()
+		if a.closeRequestLogger != nil {
+			timeout := time.Duration(a.Config.RequestLogging.ShutdownTimeoutSeconds) * time.Second
+			ctx, cancel := context.WithTimeout(context.Background(), timeout)
+			defer cancel()
+			if err := a.closeRequestLogger(ctx); err != nil {
+				log.Printf("Request logging shutdown did not complete within its budget: %v", err)
+			}
+		}
 	})
 }

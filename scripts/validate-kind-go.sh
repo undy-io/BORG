@@ -9,6 +9,7 @@ DELETE_CLUSTER=0
 CLEANUP_RESOURCES=0
 CREATED_CLUSTER=0
 DEBUG_READY=0
+WITH_KAFKA_LOGGING=0
 
 BORG_NAMESPACE="borg"
 BORG_RELEASE="borg"
@@ -20,6 +21,11 @@ DUMMY_NAMESPACE="vllm-services"
 DUMMY_RELEASE="dummy-openai"
 DUMMY_DEPLOYMENT="dummy-openai-dummy-openai"
 DUMMY_IMAGE="dummy-openai:kind"
+
+KAFKA_NAMESPACE="borg-logging"
+KAFKA_DEPLOYMENT="kafka"
+KAFKA_TOPIC="borg.request-events.v1"
+KAFKA_IMAGE="apache/kafka:4.2.1@sha256:9916d60eca5d599550e2c320230808fda342124ba550bb4ac4ea8591803262a0"
 
 AUTH_KEY_VALUE="BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc="
 AUTH_PREFIX="PROXY:"
@@ -37,6 +43,7 @@ Options:
   --create-cluster       Create the KinD cluster if it does not exist.
   --delete-cluster       Delete the cluster on exit if this script created it.
   --cleanup-resources    Uninstall test Helm releases and delete test namespaces on exit.
+  --with-kafka-logging   Deploy Kafka and validate request-event export through Helm.
   --cluster-name NAME    KinD cluster name. Default: ${CLUSTER_NAME}
   --node-image IMAGE     KinD node image. Default: pinned Kubernetes v1.34.3 image.
   --local-port PORT      Local port for BORG port-forward. Default: ${LOCAL_PORT}
@@ -67,6 +74,9 @@ while [[ $# -gt 0 ]]; do
       ;;
     --cleanup-resources)
       CLEANUP_RESOURCES=1
+      ;;
+    --with-kafka-logging)
+      WITH_KAFKA_LOGGING=1
       ;;
     --cluster-name)
       [[ $# -ge 2 ]] || die "--cluster-name requires a value"
@@ -123,6 +133,9 @@ cleanup() {
     helm --kube-context "$KUBE_CONTEXT" uninstall "$BORG_RELEASE" -n "$BORG_NAMESPACE" >/dev/null 2>&1
     helm --kube-context "$KUBE_CONTEXT" uninstall "$DUMMY_RELEASE" -n "$DUMMY_NAMESPACE" >/dev/null 2>&1
     kubectl --context "$KUBE_CONTEXT" delete namespace "$BORG_NAMESPACE" "$DUMMY_NAMESPACE" --ignore-not-found >/dev/null 2>&1
+		if [[ "$WITH_KAFKA_LOGGING" -eq 1 ]]; then
+			kubectl --context "$KUBE_CONTEXT" delete namespace "$KAFKA_NAMESPACE" --ignore-not-found >/dev/null 2>&1
+		fi
   fi
 
   if [[ "$DELETE_CLUSTER" -eq 1 && "$CREATED_CLUSTER" -eq 1 ]]; then
@@ -141,6 +154,12 @@ print_debug() {
     kubectl --context "$KUBE_CONTEXT" -n "$BORG_NAMESPACE" get deploy,svc,pods -o wide
     printf '\n# Dummy resources\n'
     kubectl --context "$KUBE_CONTEXT" -n "$DUMMY_NAMESPACE" get deploy,pods -o wide
+		if [[ "$WITH_KAFKA_LOGGING" -eq 1 ]]; then
+			printf '\n# Kafka resources\n'
+			kubectl --context "$KUBE_CONTEXT" -n "$KAFKA_NAMESPACE" get deploy,svc,pods -o wide
+			printf '\n# Kafka logs\n'
+			kubectl --context "$KUBE_CONTEXT" -n "$KAFKA_NAMESPACE" logs "deploy/${KAFKA_DEPLOYMENT}" --tail=100
+		fi
     printf '\n# BORG deployment describe\n'
     kubectl --context "$KUBE_CONTEXT" -n "$BORG_NAMESPACE" describe deploy "$BORG_DEPLOYMENT"
     printf '\n# BORG logs\n'
@@ -166,6 +185,11 @@ cd "$REPO_ROOT"
 for cmd in go docker kind kubectl helm curl; do
   require_command "$cmd"
 done
+if [[ "$WITH_KAFKA_LOGGING" -eq 1 ]]; then
+	for cmd in jq base64 cmp; do
+		require_command "$cmd"
+	done
+fi
 
 mkdir -p "$BUILD_DIR"
 : > "$PORT_FORWARD_LOG"
@@ -289,6 +313,51 @@ config:
     - namespace: "${DUMMY_NAMESPACE}"
       selector: "borg/expose=vllm"
       modelkey: "borg/models"
+EOF
+
+	if [[ "$WITH_KAFKA_LOGGING" -eq 1 ]]; then
+		cat >> "${BUILD_DIR}/borg-values.yaml" <<EOF
+  request_logging:
+    sink: kafka
+    queue_capacity: 1000
+    queue_capacity_bytes: 67108864
+    shutdown_timeout_seconds: 10
+    capture:
+      request_body: true
+      response_body: true
+      request_headers: true
+      response_headers: true
+      excluded_request_headers: [Authorization]
+      excluded_response_headers: [Set-Cookie]
+      max_request_body_bytes: 524288
+      max_response_body_bytes: 16777216
+    session_headers:
+      - name: X-Session-ID
+        value_mode: raw
+      - name: X-Capture
+        value_mode: sha256
+    partition_header: X-Session-ID
+    filters:
+      - headers:
+          X-Capture: ['^yes$']
+    kafka:
+      brokers: [kafka.${KAFKA_NAMESPACE}.svc.cluster.local:9092]
+      topic: ${KAFKA_TOPIC}
+      client_id: borg-kind-acceptance
+      tls:
+        enabled: false
+        server_name: ""
+        ca_file: ""
+        cert_file: ""
+        key_file: ""
+      sasl:
+        mechanism: none
+        username_from_env: BORG_KAFKA_USERNAME
+        password_from_env: BORG_KAFKA_PASSWORD
+EOF
+	fi
+
+	cat >> "${BUILD_DIR}/borg-values.yaml" <<EOF
 ingress:
   enabled: false
 EOF
@@ -301,6 +370,100 @@ EOF
   kubectl --context "$KUBE_CONTEXT" -n "$BORG_NAMESPACE" rollout status \
     "deploy/${BORG_DEPLOYMENT}" \
     --timeout=120s
+}
+
+deploy_kafka() {
+	[[ "$WITH_KAFKA_LOGGING" -eq 1 ]] || return
+	log "Deploying Kafka request-logging broker"
+	kubectl --context "$KUBE_CONTEXT" create namespace "$KAFKA_NAMESPACE" \
+		--dry-run=client \
+		-o yaml | kubectl --context "$KUBE_CONTEXT" apply -f -
+
+	cat > "${BUILD_DIR}/kafka.yaml" <<EOF
+apiVersion: v1
+kind: Service
+metadata:
+  name: kafka
+  namespace: ${KAFKA_NAMESPACE}
+spec:
+  selector:
+    app: kafka
+  ports:
+    - name: kafka
+      port: 9092
+      targetPort: kafka
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ${KAFKA_DEPLOYMENT}
+  namespace: ${KAFKA_NAMESPACE}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: kafka
+  template:
+    metadata:
+      labels:
+        app: kafka
+    spec:
+      containers:
+        - name: kafka
+          image: ${KAFKA_IMAGE}
+          ports:
+            - name: kafka
+              containerPort: 9092
+            - name: controller
+              containerPort: 9093
+          env:
+            - name: KAFKA_NODE_ID
+              value: "1"
+            - name: KAFKA_PROCESS_ROLES
+              value: broker,controller
+            - name: KAFKA_LISTENERS
+              value: INTERNAL://:9092,CONTROLLER://:9093
+            - name: KAFKA_ADVERTISED_LISTENERS
+              value: INTERNAL://kafka.${KAFKA_NAMESPACE}.svc.cluster.local:9092
+            - name: KAFKA_LISTENER_SECURITY_PROTOCOL_MAP
+              value: INTERNAL:PLAINTEXT,CONTROLLER:PLAINTEXT
+            - name: KAFKA_INTER_BROKER_LISTENER_NAME
+              value: INTERNAL
+            - name: KAFKA_CONTROLLER_LISTENER_NAMES
+              value: CONTROLLER
+            - name: KAFKA_CONTROLLER_QUORUM_VOTERS
+              value: 1@localhost:9093
+            - name: KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR
+              value: "1"
+            - name: KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR
+              value: "1"
+            - name: KAFKA_TRANSACTION_STATE_LOG_MIN_ISR
+              value: "1"
+            - name: KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS
+              value: "0"
+EOF
+	kubectl --context "$KUBE_CONTEXT" apply -f "${BUILD_DIR}/kafka.yaml"
+	kubectl --context "$KUBE_CONTEXT" -n "$KAFKA_NAMESPACE" rollout status \
+		"deploy/${KAFKA_DEPLOYMENT}" --timeout=180s
+
+	local ready=0
+	for _ in $(seq 1 60); do
+		if kubectl --context "$KUBE_CONTEXT" -n "$KAFKA_NAMESPACE" exec "deploy/${KAFKA_DEPLOYMENT}" -- \
+			/opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list >/dev/null 2>&1; then
+			ready=1
+			break
+		fi
+		sleep 1
+	done
+	[[ "$ready" -eq 1 ]] || die "Kafka did not become ready"
+	kubectl --context "$KUBE_CONTEXT" -n "$KAFKA_NAMESPACE" exec "deploy/${KAFKA_DEPLOYMENT}" -- \
+		/opt/kafka/bin/kafka-topics.sh \
+		--bootstrap-server localhost:9092 \
+		--create \
+		--if-not-exists \
+		--topic "$KAFKA_TOPIC" \
+		--partitions 3 \
+		--replication-factor 1 >/dev/null
 }
 
 mint_token() {
@@ -402,6 +565,104 @@ validate_http() {
   assert_contains "$stream_response" 'data: [DONE]' "stream should include DONE sentinel"
 }
 
+consume_kafka_events() {
+	kubectl --context "$KUBE_CONTEXT" -n "$KAFKA_NAMESPACE" exec "deploy/${KAFKA_DEPLOYMENT}" -- \
+		/opt/kafka/bin/kafka-console-consumer.sh \
+		--bootstrap-server localhost:9092 \
+		--topic "$KAFKA_TOPIC" \
+		--from-beginning \
+		--timeout-ms 2000 > "${BUILD_DIR}/kind-events.jsonl" 2>/dev/null || true
+}
+
+reconstruct_kafka_body() {
+	local session="$1"
+	local event_type="$2"
+	local output="$3"
+	local request_id
+	request_id="$(jq -r --arg session "$session" \
+		'select(.event_type == "request.started" and .session_headers["x-session-id"][0].value == $session) | .request_id' \
+		"${BUILD_DIR}/kind-events.jsonl" | head -n 1)"
+	[[ -n "$request_id" ]] || die "no Kafka request events found for ${session}"
+	jq -r -s --arg id "$request_id" --arg type "$event_type" \
+		'[.[] | select(.request_id == $id and .event_type == $type)] | sort_by(.sequence) | .[].payload' \
+		"${BUILD_DIR}/kind-events.jsonl" | base64 --decode > "$output"
+}
+
+validate_kafka_logging() {
+	[[ "$WITH_KAFKA_LOGGING" -eq 1 ]] || return
+	log "Validating Kafka request logging through Helm"
+	local base_url="http://127.0.0.1:${LOCAL_PORT}"
+	local token
+	token="$(mint_token)"
+	local session_prefix="kind-$(date +%s)-$$"
+	local normal_session="${session_prefix}-normal"
+	local stream_session="${session_prefix}-stream"
+	local normal_payload='{"model":"gpt-3.5-turbo","messages":[{"role":"user","content":"kind logging"}]}'
+	local stream_payload='{"model":"gpt-3.5-turbo","stream":true,"messages":[{"role":"user","content":"kind stream"}]}'
+	printf '%s' "$normal_payload" > "${BUILD_DIR}/kind-normal-request.json"
+	printf '%s' "$stream_payload" > "${BUILD_DIR}/kind-stream-request.json"
+
+	curl -fsS \
+		-H "Authorization: Bearer ${token}" \
+		-H "Content-Type: application/json" \
+		-H "X-Capture: yes" \
+		-H "X-Session-ID: ${normal_session}" \
+		-H "X-API-Key: privileged-kind-key" \
+		--data "$normal_payload" \
+		"${base_url}/v1/chat/completions" > "${BUILD_DIR}/kind-normal-response.json"
+	curl -fsS --no-buffer \
+		-H "Authorization: Bearer ${token}" \
+		-H "Content-Type: application/json" \
+		-H "X-Capture: yes" \
+		-H "X-Session-ID: ${stream_session}" \
+		--data "$stream_payload" \
+		"${base_url}/v1/chat/completions" > "${BUILD_DIR}/kind-stream-response.txt"
+
+	local normal_request_id=""
+	local stream_request_id=""
+	local completed=0
+	for _ in $(seq 1 30); do
+		consume_kafka_events
+		normal_request_id="$(jq -r --arg session "$normal_session" \
+			'select(.event_type == "request.started" and .session_headers["x-session-id"][0].value == $session) | .request_id' \
+			"${BUILD_DIR}/kind-events.jsonl" | head -n 1)"
+		stream_request_id="$(jq -r --arg session "$stream_session" \
+			'select(.event_type == "request.started" and .session_headers["x-session-id"][0].value == $session) | .request_id' \
+			"${BUILD_DIR}/kind-events.jsonl" | head -n 1)"
+		if [[ -n "$normal_request_id" && -n "$stream_request_id" ]] && \
+			jq -e --arg id "$normal_request_id" 'select(.event_type == "request.completed" and .request_id == $id)' \
+				"${BUILD_DIR}/kind-events.jsonl" >/dev/null && \
+			jq -e --arg id "$stream_request_id" 'select(.event_type == "request.completed" and .request_id == $id)' \
+				"${BUILD_DIR}/kind-events.jsonl" >/dev/null; then
+			completed=2
+			break
+		fi
+		sleep 1
+	done
+	[[ "$completed" -ge 2 ]] || die "expected two completed Kafka request streams, got ${completed}"
+
+	jq -e --arg id "$normal_request_id" \
+		'select(.request_id == $id and .event_type == "request.header" and .header_name == "x-api-key" and .value == "privileged-kind-key")' \
+		"${BUILD_DIR}/kind-events.jsonl" >/dev/null || die "permitted sensitive request header was not exported"
+	if jq -e --arg id "$normal_request_id" \
+		'select(.request_id == $id and .event_type == "request.header" and .header_name == "authorization")' \
+		"${BUILD_DIR}/kind-events.jsonl" >/dev/null; then
+		die "excluded Authorization request header was exported"
+	fi
+	jq -e --arg id "$normal_request_id" \
+		'select(.request_id == $id and .event_type == "response.header" and .header_name == "content-type")' \
+		"${BUILD_DIR}/kind-events.jsonl" >/dev/null || die "response headers were not exported"
+
+	reconstruct_kafka_body "$normal_session" request.body_chunk "${BUILD_DIR}/kind-reconstructed-normal-request.json"
+	reconstruct_kafka_body "$normal_session" response.body_chunk "${BUILD_DIR}/kind-reconstructed-normal-response.json"
+	reconstruct_kafka_body "$stream_session" request.body_chunk "${BUILD_DIR}/kind-reconstructed-stream-request.json"
+	reconstruct_kafka_body "$stream_session" response.body_chunk "${BUILD_DIR}/kind-reconstructed-stream-response.txt"
+	cmp "${BUILD_DIR}/kind-normal-request.json" "${BUILD_DIR}/kind-reconstructed-normal-request.json"
+	cmp "${BUILD_DIR}/kind-normal-response.json" "${BUILD_DIR}/kind-reconstructed-normal-response.json"
+	cmp "${BUILD_DIR}/kind-stream-request.json" "${BUILD_DIR}/kind-reconstructed-stream-request.json"
+	cmp "${BUILD_DIR}/kind-stream-response.txt" "${BUILD_DIR}/kind-reconstructed-stream-response.txt"
+}
+
 validate_config_rollout() {
   log "Validating config-only Helm upgrade rollout"
   local before_checksum before_replica_set after_checksum after_replica_set
@@ -432,9 +693,11 @@ wait_for_cluster
 build_images
 load_images
 deploy_dummy
+deploy_kafka
 deploy_borg
 start_port_forward
 validate_http
+validate_kafka_logging
 validate_config_rollout
 
 log "KinD Go validation passed"

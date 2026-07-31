@@ -42,6 +42,17 @@ securityContext: {}
 
 resources: {}
 
+terminationGracePeriodSeconds: 60
+
+requestLoggingSecrets:
+  kafkaCredentials:
+    existingSecret: ""
+    usernameKey: username
+    passwordKey: password
+  kafkaTLS:
+    existingSecret: ""
+    mountPath: /app/kafka-tls
+
 config:
   auth_prefix: "BORG:"
   update_interval: 30
@@ -55,6 +66,37 @@ config:
     # Time to wait after sending a request for final response headers to complete.
     # Set to 0 for unlimited.
     response_header_timeout_seconds: 300
+  request_logging:
+    sink: noop
+    queue_capacity: 100000
+    queue_capacity_bytes: 4294967296
+    shutdown_timeout_seconds: 10
+    capture:
+      request_body: true
+      response_body: true
+      request_headers: false
+      response_headers: false
+      excluded_request_headers: []
+      excluded_response_headers: []
+      max_request_body_bytes: 524288
+      max_response_body_bytes: 16777216
+    session_headers: []
+    partition_header: ""
+    filters: []
+    kafka:
+      brokers: []
+      topic: borg.request-events.v1
+      client_id: borg
+      tls:
+        enabled: false
+        server_name: ""
+        ca_file: ""
+        cert_file: ""
+        key_file: ""
+      sasl:
+        mechanism: none
+        username_from_env: BORG_KAFKA_USERNAME
+        password_from_env: BORG_KAFKA_PASSWORD
   instances: []
   # - endpoint: http://10.0.0.5:8000
   #   apikeyEnv: VLLM_APIKEY_1

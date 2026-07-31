@@ -34,6 +34,11 @@ jobs:
       - name: Run lint
         run: golangci-lint run ./...
 
+      - name: Validate host harness syntax
+        run: |
+          bash -n scripts/validate-kind-go.sh
+          bash -n scripts/validate-kafka-logging.sh
+
       - name: Build BORG
         run: go build ./cmd/borg
 

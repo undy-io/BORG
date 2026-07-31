@@ -37,6 +37,8 @@ data:
 {{ toYaml .Values.config.backend_health | indent 8 }}
       upstream:
 {{ toYaml .Values.config.upstream | indent 8 }}
+      request_logging:
+{{ toYaml .Values.config.request_logging | indent 8 }}
       instances:
 {{- if $instances }}
 {{ toYaml $instances | indent 8 }}

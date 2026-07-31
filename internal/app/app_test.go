@@ -14,6 +14,7 @@ import (
 
 	"github.com/undy-io/BORG/internal/config"
 	"github.com/undy-io/BORG/internal/discovery"
+	"github.com/undy-io/BORG/internal/requestlog"
 )
 
 func TestNewWiresHandlerFromConfig(t *testing.T) {
@@ -39,6 +40,78 @@ borg:
 	borgApp.Handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected root 200, got %d", rec.Code)
+	}
+}
+
+func TestRequestLoggerFactoryIsInjectedAndClosed(t *testing.T) {
+	path := writeAppConfig(t, `
+borg:
+  auth_key: "EMPTY"
+  request_logging:
+    sink: kafka
+    filters:
+      - {}
+    kafka:
+      brokers: ["kafka.invalid:9092"]
+`)
+	called := false
+	closed := false
+	borgApp, err := NewWithOptions(path, Options{
+		RequestLoggerFactory: func(loggingConfig requestlog.Config) (*requestlog.Logger, func(context.Context) error, error) {
+			called = loggingConfig.Sink == requestlog.SinkKafka
+			return requestlog.NewLogger(loggingConfig, nil), func(context.Context) error {
+				closed = true
+				return nil
+			}, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !called {
+		t.Fatal("request logger factory did not receive Kafka config")
+	}
+	borgApp.Close()
+	if !closed {
+		t.Fatal("App.Close did not close request logging")
+	}
+}
+
+func TestKafkaTLSMaterialFailureStopsStartup(t *testing.T) {
+	path := writeAppConfig(t, `
+borg:
+  auth_key: "EMPTY"
+  request_logging:
+    sink: kafka
+    kafka:
+      brokers: ["kafka.invalid:9092"]
+      tls:
+        enabled: true
+        ca_file: /definitely/missing/ca.pem
+`)
+	if _, err := New(path); err == nil || !strings.Contains(err.Error(), "Kafka TLS CA") {
+		t.Fatalf("expected local TLS material failure, got %v", err)
+	}
+}
+
+func TestKafkaBrokerOutageDoesNotAffectStartupOrReadiness(t *testing.T) {
+	path := writeAppConfig(t, `
+borg:
+  auth_key: "EMPTY"
+  request_logging:
+    sink: kafka
+    kafka:
+      brokers: ["127.0.0.1:1"]
+`)
+	borgApp, err := New(path)
+	if err != nil {
+		t.Fatalf("broker outage affected startup: %v", err)
+	}
+	defer borgApp.Close()
+	recorder := httptest.NewRecorder()
+	borgApp.Handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/", nil))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("broker outage affected readiness: status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
 }
 

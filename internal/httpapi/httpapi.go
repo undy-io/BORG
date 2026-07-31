@@ -6,15 +6,24 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/undy-io/BORG/internal/auth"
 	"github.com/undy-io/BORG/internal/proxy"
+	"github.com/undy-io/BORG/internal/requestlog"
 )
 
 type Handler struct {
 	auth                *auth.Authenticator
 	proxy               *proxy.Service
 	maxRequestBodyBytes int64
+	requestLogger       *requestlog.Logger
+}
+
+func WithRequestLogger(logger *requestlog.Logger) Option {
+	return func(h *Handler) {
+		h.requestLogger = logger
+	}
 }
 
 type Option func(*Handler)
@@ -50,7 +59,12 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) handleProxy(w http.ResponseWriter, r *http.Request) {
-	if _, err := h.auth.Require(r); err != nil {
+	var started time.Time
+	if h.requestLogger.Enabled() {
+		started = time.Now()
+	}
+	principal, err := h.auth.Require(r)
+	if err != nil {
 		writeError(w, err)
 		return
 	}
@@ -76,9 +90,38 @@ func (h *Handler) handleProxy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.proxy.Forward(w, r, rawBody, model, stream); err != nil {
-		writeError(w, err)
+	recorder := h.requestLogger.Start(requestlog.StartInput{
+		Started:     started,
+		Principal:   principal,
+		Model:       model,
+		Stream:      stream,
+		Headers:     r.Header,
+		Host:        r.Host,
+		Method:      r.Method,
+		Path:        r.URL.EscapedPath(),
+		ContentType: r.Header.Get("Content-Type"),
+		Body:        rawBody,
+	})
+	if recorder == nil {
+		if err := h.proxy.Forward(w, r, rawBody, model, stream); err != nil {
+			writeError(w, err)
+		}
+		return
 	}
+
+	observedWriter := requestlog.NewResponseWriter(w, recorder)
+	forwardResult, forwardErr := h.proxy.ForwardObserved(observedWriter, r, rawBody, model, stream, recorder)
+	if forwardErr != nil {
+		writeError(observedWriter, forwardErr)
+	}
+	status, writeErr := observedWriter.Snapshot()
+	recorder.Complete(requestlog.CompletionInput{
+		Forward:          forwardResult,
+		Err:              forwardErr,
+		DownstreamStatus: status,
+		ClientWriteError: writeErr,
+		ClientCancelled:  r.Context().Err() != nil,
+	})
 }
 
 func parseProxyBody(rawBody []byte, accept string) (string, bool, error) {

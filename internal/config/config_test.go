@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/undy-io/BORG/internal/discovery"
+	"github.com/undy-io/BORG/internal/requestlog"
 )
 
 func TestResolvePathHostAndPort(t *testing.T) {
@@ -99,11 +100,114 @@ borg:
 	if runtime.Upstream.ResponseHeaderTimeoutSeconds != DefaultResponseHeaderTimeout {
 		t.Fatalf("expected response-header timeout %d, got %d", DefaultResponseHeaderTimeout, runtime.Upstream.ResponseHeaderTimeoutSeconds)
 	}
+	if runtime.RequestLogging.Sink != requestlog.SinkNoop || runtime.RequestLogging.Enabled() {
+		t.Fatalf("expected request logging to default to noop, got %#v", runtime.RequestLogging)
+	}
 
 	assertInstanceKey(t, runtime.Instances, "http://upstream-one", "sk-env")
 	assertInstanceKey(t, runtime.Instances, "http://upstream-two", "sk-inline")
 	assertInstanceKey(t, runtime.Instances, "http://upstream-three", "sk-default")
 	assertInstanceKey(t, runtime.Instances, "http://upstream-four", "sk-inline-fallback")
+}
+
+func TestStaticInstanceEndpointValidation(t *testing.T) {
+	tests := []struct {
+		name      string
+		endpoint  string
+		wantError bool
+	}{
+		{name: "HTTP", endpoint: "http://model:8000"},
+		{name: "HTTPS with base path", endpoint: "https://[::1]:8443/v1"},
+		{name: "relative", endpoint: "model:8000", wantError: true},
+		{name: "unsupported scheme", endpoint: "ftp://model", wantError: true},
+		{name: "missing host", endpoint: "http:///v1", wantError: true},
+		{name: "port without host", endpoint: "http://:8000", wantError: true},
+		{name: "userinfo", endpoint: "http://user:pass@model", wantError: true},
+		{name: "query", endpoint: "http://model?region=one", wantError: true},
+		{name: "empty query", endpoint: "http://model?", wantError: true},
+		{name: "fragment", endpoint: "http://model#fragment", wantError: true},
+		{name: "invalid escape", endpoint: "http://%zz", wantError: true},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			runtime, err := ResolveRuntime(&File{Borg: BorgConfig{Instances: []Instance{{
+				Endpoint: test.endpoint,
+				Models:   []string{"model"},
+			}}}})
+			if test.wantError {
+				if err == nil || !strings.Contains(err.Error(), "instance endpoint") {
+					t.Fatalf("expected endpoint validation error, got %v", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if runtime.Instances[0].Endpoint != test.endpoint {
+				t.Fatalf("expected endpoint %q to remain unchanged, got %q", test.endpoint, runtime.Instances[0].Endpoint)
+			}
+		})
+	}
+}
+
+func TestRequestLoggingLoadsFromYAMLAndJSON(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		ext     string
+		content string
+	}{
+		{name: "YAML", ext: ".yaml", content: "borg:\n  request_logging:\n    capture:\n      request_headers: true\n      excluded_request_headers: [Authorization]\n    filters:\n      - {}\n    session_headers:\n      - name: X-Session-ID\n        value_mode: raw\n    partition_header: X-Partition-Only\n"},
+		{name: "JSON", ext: ".json", content: `{"borg":{"request_logging":{"capture":{"request_headers":true,"excluded_request_headers":["Authorization"]},"filters":[{}],"session_headers":[{"name":"X-Session-ID","value_mode":"raw"}],"partition_header":"X-Partition-Only"}}}`},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config"+test.ext)
+			writeFile(t, path, test.content)
+			runtime, err := Load(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if runtime.RequestLogging.PartitionHeader != "x-partition-only" || !runtime.RequestLogging.Capture.RequestHeaders ||
+				len(runtime.RequestLogging.Capture.ExcludedRequestHeaders) != 1 || !runtime.RequestLogging.Matcher.Match("ANONYMOUS", "model", nil) {
+				t.Fatalf("unexpected request logging config %#v", runtime.RequestLogging)
+			}
+		})
+	}
+}
+
+func TestRequestLoggingEnvironmentCollisionsFail(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		borg BorgConfig
+	}{
+		{name: "fixed", borg: BorgConfig{}},
+		{name: "auth", borg: BorgConfig{AuthKeyFromEnv: "KAFKA_USER"}},
+		{name: "backend", borg: BorgConfig{Instances: []Instance{{Endpoint: "http://model", Models: []string{"m"}, APIKeyEnv: "KAFKA_USER"}}}},
+		{name: "service backend", borg: BorgConfig{K8SServiceDiscover: []ServiceDiscovery{{ID: "router", ServiceName: "router", APIKeyEnv: "KAFKA_USER"}}}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			usernameEnv := "KAFKA_USER"
+			if test.name == "fixed" {
+				usernameEnv = PortEnv
+			}
+			t.Setenv(usernameEnv, "user")
+			t.Setenv("KAFKA_PASSWORD", "password")
+			test.borg.RequestLogging = requestlog.FileConfig{
+				Sink: "kafka",
+				Kafka: requestlog.FileKafkaConfig{
+					Brokers: []string{"kafka:9092"},
+					SASL: requestlog.FileSASLConfig{
+						Mechanism:       "plain",
+						UsernameFromEnv: usernameEnv,
+						PasswordFromEnv: "KAFKA_PASSWORD",
+					},
+				},
+			}
+			if _, err := ResolveRuntime(&File{Borg: test.borg}); err == nil || !strings.Contains(err.Error(), "collides") {
+				t.Fatalf("expected environment collision, got %v", err)
+			}
+		})
+	}
 }
 
 func TestUpstreamResponseHeaderTimeoutConfiguration(t *testing.T) {

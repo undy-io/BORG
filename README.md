@@ -40,6 +40,7 @@ The production container exposes the Go service as `/usr/local/bin/borg`. During
 | **Pluggable auth**        | Optional AES‑256 request signing (`auth_key`) and token prefix validation (`auth_prefix`) |
 | **Lightweight**           | Go `net/http` runtime with a small multi-stage container image                     |
 | **Helm chart & CI**       | One‑line `helm upgrade` and GitHub Actions pipeline to GHCR                        |
+| **Request event export**  | Filtered, ordered, privileged request streams with optional Kafka delivery         |
 
 ---
 
@@ -105,6 +106,9 @@ borg:
   upstream:
     response_header_timeout_seconds: 300 # 0 disables the timeout
 
+  request_logging:
+    sink: noop # set kafka and configure filters/brokers to export events
+
   # Static back‑ends
   instances:
     - endpoint: "http://10.0.0.5:8000"
@@ -131,6 +135,13 @@ borg:
 ```
 
 The file can be mounted into the container or set via `PROXY_CONFIG` env‑var. See `config.example.yaml` for a template.
+
+Request logging defaults to `noop` and has no readiness dependency. Kafka mode
+supports principal/model/header filters, optional request/response header events,
+bounded body chunks, TLS, and PLAIN or SCRAM SASL. Captured events are privileged
+and may contain credentials or personal data. See
+[`docs/request-logging.md`](docs/request-logging.md) for the event contract,
+sensitive-data guidance, delivery semantics, and consumer reconstruction procedure.
 
 After BORG finishes sending an upstream request, it waits this long for the
 upstream's final response headers to complete. A timeout counts against that
@@ -201,6 +212,11 @@ Key values
 | `serviceAccount.create` | Create BORG's ServiceAccount     | `true`                 |
 | `podAnnotations`     | Pod-template annotations for integrations | `{}`             |
 | `resources`          | Container resource requests/limits  | `{}`                   |
+| `terminationGracePeriodSeconds` | Pod shutdown budget | `60`                    |
+| `config.request_logging.capture.request_headers` | Emit inbound request headers | `false` |
+| `config.request_logging.capture.response_headers` | Emit downstream response headers | `false` |
+| `requestLoggingSecrets.kafkaCredentials.existingSecret` | Kafka SASL Secret | `""` |
+| `requestLoggingSecrets.kafkaTLS.existingSecret` | Kafka TLS Secret | `""`     |
 | `config`             | Inline proxy runtime config         | See `values.yaml`      |
 
 For GitOps installs, set `authKeySecret.existingSecret` to a pre-created
@@ -338,6 +354,7 @@ golangci-lint run ./...
 go build ./cmd/borg
 go build ./cmd/borg-genkey
 bash -n scripts/validate-kind-go.sh
+bash -n scripts/validate-kafka-logging.sh
 ```
 
 Go fake Kubernetes smoke checks:
@@ -356,6 +373,13 @@ To create and delete the KinD cluster inside the validation run:
 
 ```bash
 scripts/validate-kind-go.sh --create-cluster --delete-cluster
+```
+
+To include an in-cluster Kafka broker and validate Helm-configured header/body
+event reconstruction:
+
+```bash
+scripts/validate-kind-go.sh --create-cluster --delete-cluster --with-kafka-logging
 ```
 
 The harness uses this pinned Kubernetes node image by default because this WSL runtime reports cgroup v1:
@@ -413,6 +437,7 @@ The `dummy-openai/` Go app remains as a lightweight test backend for local and K
 ## 📦 Release workflow
 
 * Pushes and pull requests run Go CI from `.github/workflows/go.yml`.
+* Relevant runtime and chart changes run KinD/Kafka acceptance from `.github/workflows/integration.yml`.
 * Pushes to **master** build Go runtime `:edge` and `:sha-<short>` images from `.github/workflows/docker.yml`.
 * Tagging `vX.Y.Z` also produces `:latest`, `:X.Y`, and `:X.Y.Z` tags.
 

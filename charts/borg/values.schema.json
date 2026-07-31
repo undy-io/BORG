@@ -98,6 +98,35 @@
       "additionalProperties": true
     },
 
+    "terminationGracePeriodSeconds": { "type": "integer", "minimum": 1 },
+
+    "requestLoggingSecrets": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "kafkaCredentials": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "existingSecret": { "type": "string" },
+            "usernameKey": { "type": "string", "pattern": "^[-._A-Za-z0-9]+$" },
+            "passwordKey": { "type": "string", "pattern": "^[-._A-Za-z0-9]+$" }
+          },
+          "required": ["existingSecret", "usernameKey", "passwordKey"]
+        },
+        "kafkaTLS": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "existingSecret": { "type": "string" },
+            "mountPath": { "type": "string", "pattern": "^/" }
+          },
+          "required": ["existingSecret", "mountPath"]
+        }
+      },
+      "required": ["kafkaCredentials", "kafkaTLS"]
+    },
+
     "apikeySecrets": {
       "type": "object",
       "additionalProperties": false,
@@ -144,6 +173,122 @@
             "response_header_timeout_seconds": { "type": "integer", "minimum": 0 }
           },
           "required": ["response_header_timeout_seconds"]
+        },
+        "request_logging": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "sink": { "type": "string", "enum": ["noop", "kafka"] },
+            "queue_capacity": { "type": "integer", "minimum": 1 },
+            "queue_capacity_bytes": { "type": "integer", "minimum": 1 },
+            "shutdown_timeout_seconds": { "type": "integer", "minimum": 1 },
+            "capture": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "request_body": { "type": "boolean" },
+                "response_body": { "type": "boolean" },
+                "request_headers": { "type": "boolean" },
+                "response_headers": { "type": "boolean" },
+                "excluded_request_headers": {
+                  "type": "array",
+                  "uniqueItems": true,
+                  "items": { "type": "string", "pattern": "^[!#$%&'*+.^_`|~0-9A-Za-z-]+$" }
+                },
+                "excluded_response_headers": {
+                  "type": "array",
+                  "uniqueItems": true,
+                  "items": { "type": "string", "pattern": "^[!#$%&'*+.^_`|~0-9A-Za-z-]+$" }
+                },
+                "max_request_body_bytes": { "type": "integer", "minimum": 0 },
+                "max_response_body_bytes": { "type": "integer", "minimum": 0 }
+              },
+              "required": ["request_body", "response_body", "request_headers", "response_headers", "excluded_request_headers", "excluded_response_headers", "max_request_body_bytes", "max_response_body_bytes"]
+            },
+            "session_headers": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "name": { "type": "string", "pattern": "^[!#$%&'*+.^_`|~0-9A-Za-z-]+$" },
+                  "value_mode": { "type": "string", "enum": ["sha256", "raw"] }
+                },
+                "required": ["name", "value_mode"]
+              }
+            },
+            "partition_header": { "type": "string", "pattern": "^$|^[!#$%&'*+.^_`|~0-9A-Za-z-]+$" },
+            "filters": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "principals": {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": { "type": "string" }
+                  },
+                  "models": {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": { "type": "string" }
+                  },
+                  "headers": {
+                    "type": "object",
+                    "propertyNames": { "pattern": "^[!#$%&'*+.^_`|~0-9A-Za-z-]+$" },
+                    "additionalProperties": {
+                      "type": "array",
+                      "minItems": 1,
+                      "items": { "type": "string" }
+                    }
+                  }
+                }
+              }
+            },
+            "kafka": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "brokers": {
+                  "type": "array",
+                  "items": { "type": "string", "minLength": 1 }
+                },
+                "topic": { "type": "string", "minLength": 1 },
+                "client_id": { "type": "string", "minLength": 1 },
+                "tls": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "enabled": { "type": "boolean" },
+                    "server_name": { "type": "string" },
+                    "ca_file": { "type": "string" },
+                    "cert_file": { "type": "string" },
+                    "key_file": { "type": "string" }
+                  },
+                  "required": ["enabled", "server_name", "ca_file", "cert_file", "key_file"]
+                },
+                "sasl": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "mechanism": { "type": "string", "enum": ["none", "plain", "scram-sha-256", "scram-sha-512"] },
+                    "username_from_env": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$" },
+                    "password_from_env": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$" }
+                  },
+                  "required": ["mechanism", "username_from_env", "password_from_env"]
+                }
+              },
+              "required": ["brokers", "topic", "client_id", "tls", "sasl"]
+            }
+          },
+          "required": ["sink", "queue_capacity", "queue_capacity_bytes", "shutdown_timeout_seconds", "capture", "session_headers", "partition_header", "filters", "kafka"],
+          "allOf": [
+            {
+              "if": { "properties": { "sink": { "const": "kafka" } } },
+              "then": { "properties": { "kafka": { "properties": { "brokers": { "minItems": 1 } } } } }
+            }
+          ]
         },
         "instances": {
           "type": "array",
@@ -234,7 +379,7 @@
           }
         }
       },
-      "required": ["auth_prefix", "update_interval", "max_request_body_bytes", "backend_health", "upstream", "instances", "k8s_discover", "k8s_service_discover"]
+      "required": ["auth_prefix", "update_interval", "max_request_body_bytes", "backend_health", "upstream", "request_logging", "instances", "k8s_discover", "k8s_service_discover"]
     },
 
     "server": {

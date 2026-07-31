@@ -1,0 +1,131 @@
+name: Integration CI
+
+on:
+  push:
+    paths:
+      - '.github/workflows/integration.yml'
+      - 'charts/**'
+      - 'cmd/**'
+      - 'dummy-openai/**'
+      - 'internal/**'
+      - 'scripts/validate-kind-go.sh'
+      - 'scripts/validate-kafka-logging.sh'
+      - 'go.mod'
+      - 'go.sum'
+      - 'kind-config.yaml'
+  pull_request:
+    paths:
+      - '.github/workflows/integration.yml'
+      - 'charts/**'
+      - 'cmd/**'
+      - 'dummy-openai/**'
+      - 'internal/**'
+      - 'scripts/validate-kind-go.sh'
+      - 'scripts/validate-kafka-logging.sh'
+      - 'go.mod'
+      - 'go.sum'
+      - 'kind-config.yaml'
+  workflow_dispatch:
+
+concurrency:
+  group: integration-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  kind-logging:
+    name: KinD request logging
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v5
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Install KinD v0.32.0
+        run: |
+          go install sigs.k8s.io/kind@v0.32.0
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
+      - name: Set up kubectl v1.34.3
+        uses: azure/setup-kubectl@v4
+        with:
+          version: v1.34.3
+
+      - name: Set up Helm v3.13.2
+        uses: azure/setup-helm@v5
+        with:
+          version: v3.13.2
+
+      - name: Verify Docker
+        run: docker info
+
+      - name: Run KinD request-logging acceptance
+        run: scripts/validate-kind-go.sh --create-cluster --with-kafka-logging
+
+      - name: Export failed KinD cluster logs
+        if: failure()
+        run: kind export logs build/kind/cluster-logs --name borg || true
+
+      - name: Upload KinD diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: kind-request-logging-${{ github.run_id }}
+          if-no-files-found: ignore
+          path: |
+            build/kind/cluster-logs
+            build/kind/port-forward.log
+            build/kind/kind-events.jsonl
+            build/kind/*-request.json
+            build/kind/*-response.json
+            build/kind/*-response.txt
+
+      - name: Delete KinD cluster
+        if: always()
+        run: kind delete cluster --name borg || true
+
+  kafka-acceptance:
+    name: Kafka TLS and recovery
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v5
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Set up Java
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Verify Docker
+        run: docker info
+
+      - name: Run Kafka TLS and recovery acceptance
+        env:
+          BORG_KAFKA_TEST_ARTIFACT_DIR: build/kafka-acceptance
+        run: scripts/validate-kafka-logging.sh
+
+      - name: Upload Kafka diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: kafka-acceptance-${{ github.run_id }}
+          if-no-files-found: ignore
+          path: build/kafka-acceptance

@@ -25,7 +25,9 @@ packages remain internal implementation details rather than a public Go SDK.
 │   │   └── k8s/
 │   ├── httpapi/
 │   ├── openai/
-│   └── proxy/
+│   ├── proxy/
+│   └── requestlog/
+│       └── kafkasink/
 ├── tests/k8s_smoke/
 ├── dummy-openai/
 ├── charts/borg/
@@ -49,13 +51,18 @@ text that decodes to exactly 32 bytes.
 2. Create the request authenticator.
 3. Create the proxy with backend-health and response-header-timeout settings.
 4. Register the static backend snapshot.
-5. Build the HTTP handler with the resolved request-body limit.
-6. Create one reconciler and refresh loop for every configured discovery source.
+5. Create the optional request-event exporter and logger.
+6. Build the HTTP handler with the resolved request-body limit and logger.
+7. Create one reconciler and refresh loop for every configured discovery source.
 
 Discovery refreshes immediately at startup, then waits `update_interval` after
 each completed attempt. Sources refresh independently, and attempts for one
 source never overlap. Shutdown cancels all source contexts and waits for their
 workers to exit.
+
+After HTTP shutdown has allowed in-flight handlers to finish, application close
+stops discovery and gives the request-event exporter one configured, bounded
+flush attempt. Kafka connectivity is never part of startup probing or readiness.
 
 ## Configuration
 
@@ -76,6 +83,8 @@ Important runtime contracts:
   cooldown; ejection on HTTP 500 is disabled by default.
 - Discovery source IDs are unique. Pod source IDs can be derived when omitted;
   Service source IDs are explicit.
+- Request logging defaults to `noop`. Filters, bounded metadata transforms, queue budgets,
+  Kafka TLS files, and SASL environment credentials are validated at startup.
 
 ## HTTP And Authentication
 
@@ -125,6 +134,32 @@ Borg-Retry: response-header-timeout
 
 BORG removes this header before forwarding upstream. No retry occurs after
 downstream response bytes have been committed.
+
+## Request Event Logging
+
+`internal/requestlog` owns startup-compiled filters, bounded metadata transforms,
+privileged request/response header capture, flat version-1 event types,
+synchronous encoding, per-request sequence/drop accounting, exact downstream
+byte observation, and the shared non-blocking record/byte budget.
+`internal/proxy` exposes attempt observations without
+depending on request logging; its existing `Forward` method remains a wrapper
+around `ForwardObserved`.
+
+The Kafka adapter is isolated in `internal/requestlog/kafkasink` and uses
+franz-go. Accepted records remain reserved across the application channel and
+producer buffers until their delivery callbacks finish, preventing each layer
+from independently consuming the full configured budget. Kafka failures remain
+fail-open and do not affect the root readiness route or proxy results.
+
+Request events record the escaped request path without query data. The proxy
+still forwards the original raw query to the selected upstream. Optional header
+events record inbound client request headers and downstream-visible response
+headers; they do not record BORG-generated upstream headers, framing, or trailers.
+No header name is intrinsically forbidden, and operator exclusions do not change
+the raw values used for filtering or partitioning.
+
+The complete schema, filtering rules, sensitive-data warning, delivery semantics, and
+consumer reconstruction procedure are documented in `docs/request-logging.md`.
 
 ## Kubernetes Discovery
 
@@ -180,6 +215,7 @@ golangci-lint run ./...
 helm lint --strict charts/borg
 bash scripts/validate-helm-chart.sh
 bash -n scripts/validate-kind-go.sh
+bash -n scripts/validate-kafka-logging.sh
 git diff --check
 ```
 

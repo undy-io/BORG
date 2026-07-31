@@ -28,6 +28,50 @@ type HTTPError struct {
 	Detail     string
 }
 
+type AttemptResultKind string
+
+const (
+	AttemptResultResponse              AttemptResultKind = "response"
+	AttemptResultResponseHeaderTimeout AttemptResultKind = "response_header_timeout"
+	AttemptResultTransportError        AttemptResultKind = "transport_error"
+	AttemptResultClientCancelled       AttemptResultKind = "client_cancelled"
+)
+
+type AttemptStarted struct {
+	Attempt  int
+	Endpoint string
+	Started  time.Time
+}
+
+type AttemptResult struct {
+	Attempt  int
+	Endpoint string
+	Kind     AttemptResultKind
+	Status   int
+	Duration time.Duration
+}
+
+type Observer interface {
+	OnAttemptStarted(AttemptStarted)
+	OnAttemptResult(AttemptResult)
+}
+
+type ForwardResult struct {
+	AttemptCount          int
+	DownstreamResponse    bool
+	UnknownModel          bool
+	ResponseHeaderTimeout bool
+	UpstreamError         bool
+	ClientCancelled       bool
+	UpstreamBodyError     bool
+	ClientWriteError      bool
+}
+
+type streamResult struct {
+	upstreamBodyError bool
+	clientWriteError  bool
+}
+
 func (e *HTTPError) Error() string {
 	return e.Detail
 }
@@ -493,13 +537,19 @@ func (s *Service) ListModels() openai.ModelListResponse {
 }
 
 func (s *Service) Forward(w http.ResponseWriter, r *http.Request, rawBody []byte, model string, stream bool) error {
-	if stream {
-		return s.forward(w, r, rawBody, model, compressionStreaming, streamingExcludedResponseHeaders)
-	}
-	return s.forward(w, r, rawBody, model, compressionRegular, regularExcludedResponseHeaders)
+	_, err := s.ForwardObserved(w, r, rawBody, model, stream, nil)
+	return err
 }
 
-func (s *Service) forward(w http.ResponseWriter, r *http.Request, rawBody []byte, model string, compression compressionMode, excludedHeaders map[string]struct{}) error {
+func (s *Service) ForwardObserved(w http.ResponseWriter, r *http.Request, rawBody []byte, model string, stream bool, observer Observer) (ForwardResult, error) {
+	if stream {
+		return s.forward(w, r, rawBody, model, compressionStreaming, streamingExcludedResponseHeaders, observer)
+	}
+	return s.forward(w, r, rawBody, model, compressionRegular, regularExcludedResponseHeaders, observer)
+}
+
+func (s *Service) forward(w http.ResponseWriter, r *http.Request, rawBody []byte, model string, compression compressionMode, excludedHeaders map[string]struct{}, observer Observer) (ForwardResult, error) {
+	result := ForwardResult{}
 	attempted := make(map[string]struct{})
 	allowQuarantined := true
 	retryHeaderTimeout := retryResponseHeaderTimeout(r.Header)
@@ -512,35 +562,77 @@ func (s *Service) forward(w http.ResponseWriter, r *http.Request, rawBody []byte
 		endpoint, quarantined, ok := s.pickEndpoint(model, attempted, allowQuarantined)
 		if !ok {
 			if len(attempted) == 0 {
-				return &HTTPError{StatusCode: http.StatusNotFound, Detail: fmt.Sprintf("Unknown model: %q", model)}
+				result.UnknownModel = true
+				return result, &HTTPError{StatusCode: http.StatusNotFound, Detail: fmt.Sprintf("Unknown model: %q", model)}
 			}
 			if sawHeaderTimeout {
 				if lastResp != nil {
 					_ = lastResp.Body.Close()
 				}
-				return responseHeaderTimeoutFailure()
+				result.ResponseHeaderTimeout = true
+				return result, responseHeaderTimeoutFailure()
 			}
 			if lastResp != nil {
-				s.streamResponse(w, r, lastResp, lastEndpoint, false, excludedHeaders)
-				return nil
+				streamed := s.streamResponse(w, r, lastResp, lastEndpoint, false, excludedHeaders)
+				result.DownstreamResponse = true
+				result.UpstreamBodyError = streamed.upstreamBodyError
+				result.ClientWriteError = streamed.clientWriteError
+				result.ClientCancelled = r.Context().Err() != nil
+				return result, nil
 			}
 			if r.Context().Err() != nil {
-				return r.Context().Err()
+				result.ClientCancelled = true
+				return result, r.Context().Err()
 			}
-			return upstreamFailure(lastErr)
+			result.UpstreamError = true
+			return result, upstreamFailure(lastErr)
 		}
 		if quarantined {
 			allowQuarantined = false
 		}
 		attempted[endpoint.URL] = struct{}{}
 
-		resp, err := s.openUpstream(r, rawBody, endpoint, compression)
+		upstreamReq, err := buildUpstreamRequest(r.Context(), r, rawBody, endpoint, compression)
 		if err != nil {
 			if requestEnded(r) {
 				if lastResp != nil {
 					_ = lastResp.Body.Close()
 				}
-				return r.Context().Err()
+				result.ClientCancelled = true
+				return result, r.Context().Err()
+			}
+			s.recordFailure(endpoint.URL)
+			lastErr = err
+			continue
+		}
+		result.AttemptCount++
+		attempt := result.AttemptCount
+		started := time.Now()
+		if observer != nil {
+			observer.OnAttemptStarted(AttemptStarted{Attempt: attempt, Endpoint: endpoint.URL, Started: started})
+		}
+		resp, err := s.openUpstream(upstreamReq, compression)
+		attemptResult := AttemptResult{Attempt: attempt, Endpoint: endpoint.URL, Duration: time.Since(started)}
+		if err == nil {
+			attemptResult.Kind = AttemptResultResponse
+			attemptResult.Status = resp.StatusCode
+		} else if requestEnded(r) {
+			attemptResult.Kind = AttemptResultClientCancelled
+		} else if isResponseHeaderTimeout(err) {
+			attemptResult.Kind = AttemptResultResponseHeaderTimeout
+		} else {
+			attemptResult.Kind = AttemptResultTransportError
+		}
+		if observer != nil {
+			observer.OnAttemptResult(attemptResult)
+		}
+		if err != nil {
+			if requestEnded(r) {
+				if lastResp != nil {
+					_ = lastResp.Body.Close()
+				}
+				result.ClientCancelled = true
+				return result, r.Context().Err()
 			}
 			s.recordFailure(endpoint.URL)
 			lastErr = err
@@ -550,7 +642,8 @@ func (s *Service) forward(w http.ResponseWriter, r *http.Request, rawBody []byte
 					if lastResp != nil {
 						_ = lastResp.Body.Close()
 					}
-					return responseHeaderTimeoutFailure()
+					result.ResponseHeaderTimeout = true
+					return result, responseHeaderTimeoutFailure()
 				}
 			}
 			continue
@@ -569,17 +662,16 @@ func (s *Service) forward(w http.ResponseWriter, r *http.Request, rawBody []byte
 		if lastResp != nil {
 			_ = lastResp.Body.Close()
 		}
-		s.streamResponse(w, r, resp, endpoint, true, excludedHeaders)
-		return nil
+		streamed := s.streamResponse(w, r, resp, endpoint, true, excludedHeaders)
+		result.DownstreamResponse = true
+		result.UpstreamBodyError = streamed.upstreamBodyError
+		result.ClientWriteError = streamed.clientWriteError
+		result.ClientCancelled = r.Context().Err() != nil
+		return result, nil
 	}
 }
 
-func (s *Service) openUpstream(r *http.Request, rawBody []byte, endpoint Endpoint, compression compressionMode) (*http.Response, error) {
-	upstreamReq, err := buildUpstreamRequest(r.Context(), r, rawBody, endpoint, compression)
-	if err != nil {
-		return nil, err
-	}
-
+func (s *Service) openUpstream(upstreamReq *http.Request, compression compressionMode) (*http.Response, error) {
 	client := s.regular
 	if compression == compressionStreaming {
 		client = s.streaming
@@ -587,7 +679,7 @@ func (s *Service) openUpstream(r *http.Request, rawBody []byte, endpoint Endpoin
 	return client.Do(upstreamReq)
 }
 
-func (s *Service) streamResponse(w http.ResponseWriter, r *http.Request, resp *http.Response, endpoint Endpoint, trackHealth bool, excludedHeaders map[string]struct{}) {
+func (s *Service) streamResponse(w http.ResponseWriter, r *http.Request, resp *http.Response, endpoint Endpoint, trackHealth bool, excludedHeaders map[string]struct{}) streamResult {
 	defer func() { _ = resp.Body.Close() }()
 
 	copyResponseHeaders(w.Header(), resp.Header, excludedHeaders)
@@ -602,7 +694,7 @@ func (s *Service) streamResponse(w http.ResponseWriter, r *http.Request, resp *h
 		n, readErr := resp.Body.Read(buf)
 		if n > 0 {
 			if _, writeErr := w.Write(buf[:n]); writeErr != nil {
-				return
+				return streamResult{clientWriteError: true}
 			}
 			if flusher != nil {
 				flusher.Flush()
@@ -615,12 +707,12 @@ func (s *Service) streamResponse(w http.ResponseWriter, r *http.Request, resp *h
 			if trackHealth {
 				s.recordSuccess(endpoint.URL)
 			}
-			return
+			return streamResult{}
 		}
 		if trackHealth && r.Context().Err() == nil {
 			s.recordFailure(endpoint.URL)
 		}
-		return
+		return streamResult{upstreamBodyError: r.Context().Err() == nil}
 	}
 }
 

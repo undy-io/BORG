@@ -12,6 +12,7 @@ The harness exercises the path that unit tests and fake API smoke tests cannot f
 - deploying Go BORG with Helm
 - discovering the backend through Kubernetes pod annotations
 - validating root, model listing, auth failure, authenticated POST forwarding, and SSE streaming
+- optionally deploying Kafka and validating Helm-configured request logging
 
 Implemented script:
 - `scripts/validate-kind-go.sh`
@@ -29,6 +30,8 @@ Required commands:
 - `kubectl`
 - `helm`
 - `curl`
+
+Kafka logging mode also requires `jq`, `base64`, and `cmp`.
 
 The script defaults to a pinned Kubernetes node image that works on the current WSL cgroup v1 runtime:
 
@@ -53,6 +56,12 @@ Create the cluster and leave it running for debugging:
 
 ```bash
 scripts/validate-kind-go.sh --create-cluster
+```
+
+Create a broker inside KinD and validate request/response event reconstruction:
+
+```bash
+scripts/validate-kind-go.sh --create-cluster --delete-cluster --with-kafka-logging
 ```
 
 Remove only the Helm releases and namespaces on exit:
@@ -80,6 +89,7 @@ The script:
 - deploys `dummy-openai` into `vllm-services`
 - deploys Go BORG into `borg`
 - writes Helm values with `update_interval: 2`, auth prefix `PROXY:`, and discovery selector `borg/expose=vllm`
+- with `--with-kafka-logging`, deploys the pinned Apache Kafka image, explicitly creates the topic, and enables plaintext event export through Helm
 - mints a validation token with the built Go `borg-genkey`
 - port-forwards `svc/borg-borg` to `127.0.0.1:<local-port>`
 - validates HTTP behavior with `curl`
@@ -95,6 +105,7 @@ The validation run checks that:
 - POST path is preserved
 - authenticated streaming POST returns deterministic SSE chunks and `data: [DONE]`
 - a config-only Helm upgrade changes the config checksum and active ReplicaSet
+- logging mode exports normal and SSE request streams, applies header exclusions, and reconstructs exact captured request/response bodies
 
 ## Failure Diagnostics
 On failure after cluster readiness, the script prints:
@@ -103,6 +114,7 @@ On failure after cluster readiness, the script prints:
 - BORG deployment describe output
 - recent BORG logs
 - recent dummy backend logs
+- Kafka resources and recent broker logs when logging mode is enabled
 - port-forward log output, when port-forwarding was started
 
 By default, the script leaves resources in place for debugging. Use `--cleanup-resources` when you want the script to remove Helm releases and namespaces before exit.
@@ -121,6 +133,9 @@ go test ./tests/k8s_smoke
 The fake Kubernetes smoke suite in `docs/testing/fake-kubernetes-smoke.md`
 proves Go discovery behavior without Docker or a real cluster.
 The KinD harness proves that the Go runtime, Helm chart, Kubernetes discovery, auth utility, and container packaging work together in a real local cluster.
+GitHub-hosted runners execute the logging-enabled mode from
+`.github/workflows/integration.yml`; the devcontainer still performs syntax-only
+validation because Docker is unavailable there.
 
 ## Current Validation State
 The full `v0.2.0` source-tree create/delete acceptance path passed from raw WSL
@@ -134,6 +149,10 @@ That run completed cluster creation, image build/load, Helm deployment,
 root/model checks, missing-auth rejection, authenticated POST forwarding, SSE
 streaming, a config-only Helm upgrade, checksum verification, new ReplicaSet
 verification, and cluster deletion.
+
+Request-logging acceptance is a newer optional path and is not part of the July
+28 evidence. Its current acceptance evidence comes from the GitHub integration
+workflow or a new host/raw-WSL run using `--with-kafka-logging`.
 
 The harness built its runtime images and rendered the chart from the local
 checkout; it did not pull the published GHCR image or packaged chart. Publication

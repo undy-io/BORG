@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -12,6 +13,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/undy-io/BORG/internal/discovery"
+	"github.com/undy-io/BORG/internal/requestlog"
 )
 
 const (
@@ -35,16 +37,17 @@ type File struct {
 }
 
 type BorgConfig struct {
-	AuthKey             string              `json:"auth_key" yaml:"auth_key"`
-	AuthKeyFromEnv      string              `json:"auth_key_from_env" yaml:"auth_key_from_env"`
-	AuthPrefix          string              `json:"auth_prefix" yaml:"auth_prefix"`
-	Instances           []Instance          `json:"instances" yaml:"instances"`
-	UpdateInterval      int                 `json:"update_interval" yaml:"update_interval"`
-	K8SDiscover         []DiscoverySelector `json:"k8s_discover" yaml:"k8s_discover"`
-	K8SServiceDiscover  []ServiceDiscovery  `json:"k8s_service_discover" yaml:"k8s_service_discover"`
-	BackendHealth       BackendHealthConfig `json:"backend_health" yaml:"backend_health"`
-	Upstream            UpstreamConfig      `json:"upstream" yaml:"upstream"`
-	MaxRequestBodyBytes *int64              `json:"max_request_body_bytes" yaml:"max_request_body_bytes"`
+	AuthKey             string                `json:"auth_key" yaml:"auth_key"`
+	AuthKeyFromEnv      string                `json:"auth_key_from_env" yaml:"auth_key_from_env"`
+	AuthPrefix          string                `json:"auth_prefix" yaml:"auth_prefix"`
+	Instances           []Instance            `json:"instances" yaml:"instances"`
+	UpdateInterval      int                   `json:"update_interval" yaml:"update_interval"`
+	K8SDiscover         []DiscoverySelector   `json:"k8s_discover" yaml:"k8s_discover"`
+	K8SServiceDiscover  []ServiceDiscovery    `json:"k8s_service_discover" yaml:"k8s_service_discover"`
+	BackendHealth       BackendHealthConfig   `json:"backend_health" yaml:"backend_health"`
+	Upstream            UpstreamConfig        `json:"upstream" yaml:"upstream"`
+	MaxRequestBodyBytes *int64                `json:"max_request_body_bytes" yaml:"max_request_body_bytes"`
+	RequestLogging      requestlog.FileConfig `json:"request_logging" yaml:"request_logging"`
 }
 
 type Instance struct {
@@ -99,6 +102,7 @@ type Runtime struct {
 	BackendHealth       ResolvedBackendHealth
 	Upstream            ResolvedUpstream
 	MaxRequestBodyBytes int64
+	RequestLogging      requestlog.Config
 }
 
 type ResolvedInstance struct {
@@ -215,6 +219,13 @@ func ResolveRuntime(file *File) (*Runtime, error) {
 	if err != nil {
 		return nil, err
 	}
+	requestLogging, err := requestlog.Resolve(borg.RequestLogging, os.LookupEnv)
+	if err != nil {
+		return nil, err
+	}
+	if err := validateRequestLoggingEnvironment(borg, requestLogging); err != nil {
+		return nil, err
+	}
 
 	runtime := &Runtime{
 		AuthKey:             resolveAuthKey(borg.AuthKey, borg.AuthKeyFromEnv),
@@ -224,6 +235,7 @@ func ResolveRuntime(file *File) (*Runtime, error) {
 		BackendHealth:       resolveBackendHealth(borg.BackendHealth),
 		Upstream:            upstream,
 		MaxRequestBodyBytes: maxRequestBodyBytes,
+		RequestLogging:      requestLogging,
 	}
 
 	apiKeyDefault := os.Getenv(APIKeyEnv)
@@ -234,6 +246,9 @@ func ResolveRuntime(file *File) (*Runtime, error) {
 	for _, inst := range borg.Instances {
 		if inst.Endpoint == "" {
 			return nil, errors.New("instance endpoint is required")
+		}
+		if err := validateStaticEndpoint(inst.Endpoint); err != nil {
+			return nil, fmt.Errorf("instance endpoint %q is invalid: %w", inst.Endpoint, err)
 		}
 		if len(inst.Models) == 0 {
 			return nil, fmt.Errorf("instance %q must declare at least one model", inst.Endpoint)
@@ -265,6 +280,58 @@ func ResolveRuntime(file *File) (*Runtime, error) {
 	}
 
 	return runtime, nil
+}
+
+func validateStaticEndpoint(endpoint string) error {
+	parsed, err := url.Parse(endpoint)
+	if err != nil {
+		return err
+	}
+	if !strings.EqualFold(parsed.Scheme, "http") && !strings.EqualFold(parsed.Scheme, "https") {
+		return errors.New("scheme must be http or https")
+	}
+	if parsed.Hostname() == "" {
+		return errors.New("host is required")
+	}
+	if parsed.User != nil {
+		return errors.New("userinfo is not allowed")
+	}
+	if parsed.RawQuery != "" || parsed.ForceQuery {
+		return errors.New("query is not allowed")
+	}
+	if parsed.Fragment != "" {
+		return errors.New("fragment is not allowed")
+	}
+	return nil
+}
+
+func validateRequestLoggingEnvironment(borg BorgConfig, logging requestlog.Config) error {
+	if logging.Sink != requestlog.SinkKafka || logging.Kafka.SASL.Mechanism == requestlog.SASLNone {
+		return nil
+	}
+	reserved := map[string]struct{}{
+		PortEnv: {}, ProxyConfigEnv: {}, APIKeyEnv: {}, AuthKeyEnv: {}, LegacyAuthKeyEnv: {},
+		"TLS_CERT_FILE": {}, "TLS_KEY_FILE": {},
+	}
+	if borg.AuthKeyFromEnv != "" {
+		reserved[borg.AuthKeyFromEnv] = struct{}{}
+	}
+	for _, entry := range borg.Instances {
+		if entry.APIKeyEnv != "" {
+			reserved[entry.APIKeyEnv] = struct{}{}
+		}
+	}
+	for _, entry := range borg.K8SServiceDiscover {
+		if entry.APIKeyEnv != "" {
+			reserved[entry.APIKeyEnv] = struct{}{}
+		}
+	}
+	for _, name := range []string{logging.Kafka.SASL.UsernameFromEnv, logging.Kafka.SASL.PasswordFromEnv} {
+		if _, collision := reserved[name]; collision {
+			return fmt.Errorf("request_logging Kafka SASL environment variable %q collides with another BORG environment variable", name)
+		}
+	}
+	return nil
 }
 
 func resolveUpstream(configValue UpstreamConfig) (ResolvedUpstream, error) {
