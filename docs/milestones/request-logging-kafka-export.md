@@ -1,11 +1,14 @@
-# Milestone: Request Event Logging And Kafka Export
+# Milestone: Request Event Logging And Kafka Export (Completed)
 
 ## Status
 
-Implementation is in progress. Runtime, chart, unit, kfake, and host-harness
-support are present, and the local Go, race, vet, lint, Helm, shell-syntax, and
-diff checks passed on July 30, 2026. Docker-backed CI acceptance remains to be
-completed.
+Completed with BORG `v0.3.0` on July 31, 2026.
+
+Runtime, chart, unit, kfake, and host-harness support are complete. The full
+local Go, race, vet, lint, Helm, shell-syntax, and diff checks passed on July 31,
+2026. The raw-WSL TLS/SCRAM broker acceptance also passed, including broker
+outage and retained-delivery recovery, and both GitHub-hosted Docker integration
+jobs passed.
 
 ## Objective
 
@@ -406,7 +409,7 @@ integration jobs now own those acceptance paths.
 - [x] Add benchmarks for noop, metadata-only, and full stream capture paths.
 - [x] Document event schema, sensitive-data handling, Kafka configuration, delivery
   guarantees, session partitioning, and consumer reconstruction.
-- [ ] Run a host acceptance test against a real Kafka-compatible broker: run
+- [x] Run a host acceptance test against a real Kafka-compatible broker: run
   BORG directly with environment-backed credentials and filesystem TLS material,
   send matched and unmatched normal and SSE requests, consume ordered events,
   reconstruct captured bytes, then stop the broker and prove BORG remains Ready
@@ -423,7 +426,7 @@ integration jobs now own those acceptance paths.
   reconstruction.
 - [x] Add separate GitHub-hosted KinD and real-Kafka integration jobs with pinned
   tools, bounded timeouts, cleanup, and sanitized failure artifacts.
-- [ ] Confirm both Docker-backed integration jobs are green on GitHub-hosted
+- [x] Confirm both Docker-backed integration jobs are green on GitHub-hosted
   runners.
 
 ## Quality Gates

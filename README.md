@@ -11,12 +11,14 @@
 
 ## Project status
 
-BORG `v0.2.0` is the supported Go runtime. The Python-to-Go migration is
+BORG `v0.3.0` is the supported Go runtime. The Python-to-Go migration is
 complete, and the retired Python implementation and tooling have been removed
 from the active source tree.
 
 - The root container image, Helm chart, CI, and release workflows target Go.
 - Kubernetes discovery supports eligible Pods and stable Service front doors.
+- Optional request-event logging exports selected privileged traffic to Kafka
+  while remaining fail-open and independent of readiness.
 - Go CI enforces package and fake-Kubernetes tests, vet, pinned lint, and command
   builds. Helm CI enforces strict chart validation.
 - The local quality baseline also includes a completed race-enabled test run.
@@ -181,7 +183,7 @@ In Rancher, add a chart repository with this URL:
 https://undy-io.github.io/BORG
 ```
 
-The publishing workflow runs from release tags like `v0.2.0`. It packages the
+The publishing workflow runs from release tags like `v0.3.0`. It packages the
 chart from `charts/borg/Chart.yaml`, generates `index.yaml`, and deploys the
 static Helm repository through GitHub Pages Actions. When changing the chart for
 a new Rancher-visible release, bump `version`, usually `appVersion`, and the
@@ -417,10 +419,17 @@ The `dummy-openai/` Go app remains as a lightweight test backend for local and K
 
 | Document | Purpose |
 | -------- | ------- |
-| `MILESTONE.md` | Active request-event logging and Kafka export milestone |
 | `docs/architecture.md` | Current Go runtime and deployment architecture |
+| `docs/request-logging.md` | Request-event schema, filtering, delivery, and sensitive-data contract |
 | `docs/testing/fake-kubernetes-smoke.md` | Local process-level Pod and Service discovery validation |
 | `docs/testing/kind-validation.md` | Real KinD deployment and rollout validation |
+
+### Release and milestone history
+
+| Document | Purpose |
+| -------- | ------- |
+| `docs/releases/v0.3.0.md` | Request-event logging and Kafka export release notes |
+| `docs/milestones/request-logging-kafka-export.md` | Completed request-logging implementation milestone |
 
 ### Migration history
 
